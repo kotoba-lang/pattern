@@ -816,7 +816,10 @@
          (string=? "10000000000010" (string-substring t 14 28)))))
 
 (defn test-refusals [] :bool
-  (and (string-contains? (app (ref compile-text) "(?=a)") ":refused/lookahead")
+  ;; ⚠ This asserted `(?=a)` was refused until 2026-09-10. Lookahead is
+  ;; emitted now, so the line moved to what is still refused -- lookbehind,
+  ;; and for an upstream reason (kotoba-lang/amu#915) rather than a decision.
+  (and (string-contains? (app (ref compile-text) "(?<=a)") ":refused/lookbehind")
        (string-contains? (app (ref compile-text) "(a)\\1") ":escape/back-reference")
        ;; A LEADING flag group is admitted since 2026-09-09 -- this line used
        ;; to assert `(?m)^a` was refused. What is still refused is a flag
