@@ -30,7 +30,19 @@
   (or (first (filter (fn [a] (.endsWith a ".cljs")) (rest (.slice js/process.argv 0))))
       "test/compile_parity.cljs"))
 (def repo-root (path/resolve (path/dirname (path/resolve script)) ".."))
-(def orgs (path/resolve repo-root ".."))
+;; The corpus lives beside this repo in the west layout, but a WORKTREE of it
+;; does not sit there -- measured 2026-09-09, the scrape found 0 patterns and
+;; the run REFUSED (which is the guard working: an empty corpus must not pass).
+;; So the sibling directory is one candidate, the superproject checkout is
+;; another, and PATTERN_CORPUS_ROOT overrides both.
+(def orgs
+  (let [candidates (remove nil?
+                           [(.-PATTERN_CORPUS_ROOT js/process.env)
+                            (path/resolve repo-root "..")
+                            (path/join (.-HOME js/process.env)
+                                       "github" "com-junkawasaki" "orgs" "kotoba-lang")])]
+    (or (first (filter (fn [d] (fs/existsSync (path/join d "cssom"))) candidates))
+        (path/resolve repo-root ".."))))
 
 ;; Fuel is charged per function ENTRY, and a compiler written as many small
 ;; pure helpers enters a lot of them: measured 2026-09-09, `kotoba -M test`'s

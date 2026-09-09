@@ -64,7 +64,7 @@
                         [:bol :bool] [:eol :bool]]]
              :pat/threads [:record :pat/threads
                            [[:prog :document] [:list :document] [:i :i64]
-                            [:cp :i64] [:next :document]]]
+                            [:cp :i64] [:next :document] [:eol :bool]]]
              :pat/run [:record :pat/run
                        [[:prog :document] [:list :document] [:s :string]
                         [:pos :i64] [:len :i64]]]
@@ -241,14 +241,21 @@
                                                        (document-i64-value (dat list i)) -1))
                  0))
         true
-        (any-match? (record-new [:ref :pat/threads] prog list (+ i 1) 0 (document-vector)))))))
+        (any-match? (record-new [:ref :pat/threads] prog list (+ i 1) 0 (document-vector) false))))))
 
+;; ⚠ `eol` is the flag for the position the surviving threads land ON, not the
+;; one they left. Passing `false` here drops every thread that steps onto a
+;; `$`, which is every anchored pattern longer than one character. Measured
+;; 2026-09-09 on the string-program twin: `^(px|em)$` against "px" answered
+;; FALSE while `^a$` was right, and 216 parity checks had agreed with
+;; JavaScript because the corpus contained no pattern ending in `$`.
 (defn step-threads [x [:ref :pat/threads]] :document
   (let [prog (record-get x :prog)
         list (record-get x :list)
         i (record-get x :i)
         cp (record-get x :cp)
-        next (record-get x :next)]
+        next (record-get x :next)
+        eol (record-get x :eol)]
     (if (>= i (document-count list))
       next
       (let [pc (option-value-of [:option :i64] (document-i64-value (dat list i)) -1)
@@ -256,8 +263,9 @@
         (step-threads
          (record-new [:ref :pat/threads] prog list (+ i 1) cp
                      (if (matches-here? prog ins cp)
-                       (add-thread (record-new [:ref :pat/add] prog next (+ pc 1) false false))
-                       next)))))))
+                       (add-thread (record-new [:ref :pat/add] prog next (+ pc 1) false eol))
+                       next)
+                     eol))))))
 
 ;; --- running --------------------------------------------------------------
 ;;
@@ -273,40 +281,17 @@
         len (record-get x :len)]
     (if (= 0 (document-count list))
       -1
-      (let [here (if (any-match? (record-new [:ref :pat/threads] prog list 0 0 (document-vector)))
+      (let [here (if (any-match? (record-new [:ref :pat/threads] prog list 0 0 (document-vector) false))
                    pos
                    -1)]
         (if (>= pos len)
           here
           (let [cp (string-code-point-at s pos)
                 nxt (+ pos (cp-width cp))
-                next-list (add-thread-eol
-                           prog
-                           (step-threads (record-new [:ref :pat/threads] prog list 0 cp (document-vector)))
-                           (>= nxt len))
+                next-list (step-threads
+                           (record-new [:ref :pat/threads] prog list 0 cp (document-vector) (>= nxt len)))
                 deeper (run-from (record-new [:ref :pat/run] prog next-list s nxt len))]
             (if (>= deeper 0) deeper here)))))))
-
-;; After consuming a code point the new threads may sit on `$`; the closure
-;; that produced them could not know whether the NEW position is the end, so
-;; it is re-run here with that answer.
-(defn add-thread-eol [prog :document list :document eol :bool] :document
-  (if (not eol)
-    list
-    (reopen (record-new [:ref :pat/threads] prog list 0 0 (document-vector)))))
-
-(defn reopen [x [:ref :pat/threads]] :document
-  (let [prog (record-get x :prog)
-        list (record-get x :list)
-        i (record-get x :i)
-        next (record-get x :next)]
-    (if (>= i (document-count list))
-      next
-      (reopen (record-new [:ref :pat/threads] prog list (+ i 1) 0
-                          (add-thread (record-new [:ref :pat/add] prog next
-                                                  (option-value-of [:option :i64]
-                                                                   (document-i64-value (dat list i)) -1)
-                                                  false true)))))))
 
 (defn match-end-at [prog :document s :string pos :i64] :i64
   (let [len (string-length s)]

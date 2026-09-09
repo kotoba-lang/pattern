@@ -1,5 +1,13 @@
 #!/usr/bin/env nbb
-;; Differential parity: the Kotoba matcher against the host's own regex engine.
+;; The STRING-program matcher (`kotoba/pattern_vm.kotoba`) against the host's
+;; own regex engine, over the same corpus `pattern_parity.cljs` runs against
+;; the document-program matcher.
+;;
+;; The point of the string form is that a program is no longer bounded at 32
+;; instructions -- a `:document` container is -- so the same machine has to
+;; still answer the same way. The encoder below is written HERE rather than
+;; taken from the guest: if the compiler and the matcher agreed only because
+;; they shared an encoder, this test would agree with itself.
 ;;
 ;; Both sides RUN. The oracle is JavaScript's RegExp -- the engine this
 ;; workspace's `.cljc` actually uses on the ClojureScript side -- and the port
@@ -22,7 +30,7 @@
 ;;
 ;;   nbb --classpath src test/pattern_parity.cljs
 
-(ns pattern-parity
+(ns vm-parity
   (:require ["node:child_process" :as cp]
             ["node:fs" :as fs]
             ["node:os" :as os]
@@ -32,14 +40,14 @@
 
 (def script
   (or (first (filter (fn [a] (.endsWith a ".cljs")) (rest (.slice js/process.argv 0))))
-      "test/pattern_parity.cljs"))
+      "test/vm_parity.cljs"))
 (def repo-root (path/resolve (path/dirname (path/resolve script)) ".."))
 
 ;; Measured 2026-09-09: the default per-instance budget is 512 -- a plain
 ;; countdown returns at n=510 -- and a matcher spends fuel per function entry,
 ;; so the default cannot finish a six-character search. 5000 already runs a
 ;; 40-character one; this is the host choosing, which is the point of the knob.
-(def fuel 200000)
+(def fuel 20000000)
 
 (def failures (atom 0))
 (def checks (atom 0))
@@ -82,6 +90,13 @@
    ["&([a-zA-Z][a-zA-Z0-9]*)" ["&amp" "&a" "&" "&1a" ""]]
    ["(?i)!important" ["!important" "!IMPORTANT" "!ImPoRtAnT" "important"]]
    ["\\.[a-z]+" [".css" "." "css" ".CSS"]]
+   ;; The shape a backtracker dies on. The long inputs are here on purpose:
+   ;; with the thread-list dedup removed the machine answers
+   ;; `doc-vector-too-large` from n=8 (measured 2026-09-09), so these are what
+   ;; make the dedup observable. Without them the corpus passed either way.
+   ["(a+)+b" ["b" "ab" "aaab" "aaaa" ""
+              "aaaaaaaaaaaaaaaaaaaaaaaa" "aaaaaaaaaaaaaaaaaaaaaaaab"]]
+
    ;; --- patterns that END in `$` -------------------------------------------
    ;;
    ;; The corpus had none until 2026-09-09, and their absence hid a real bug:
@@ -95,12 +110,26 @@
    ["^(px|em)$" ["px" "em" "pxem" "p" ""]]
    ["^[-+]?[0-9]+$" ["12" "-12" "+3" "1a" ""]]
    ["[0-9]+$" ["12" "a12" "12a" ""]]
-   ;; The shape a backtracker dies on. The long inputs are here on purpose:
-   ;; with the thread-list dedup removed the machine answers
-   ;; `doc-vector-too-large` from n=8 (measured 2026-09-09), so these are what
-   ;; make the dedup observable. Without them the corpus passed either way.
-   ["(a+)+b" ["b" "ab" "aaab" "aaaa" ""
-              "aaaaaaaaaaaaaaaaaaaaaaaa" "aaaaaaaaaaaaaaaaaaaaaaaab"]]])
+   ;; --- the reason the string form exists ---------------------------------
+   ;;
+   ;; Real literals from the browser stack whose programs are FAR past the 32
+   ;; instructions a `:document` container holds. The document matcher cannot
+   ;; be handed these at all; this one runs them.
+   ;;
+   ;;   257 instructions  the email address in kiyaku
+   ;;    88               the IPv4 in cssom
+   ;;    82               the CSS length in cssom
+   ;;    65               the 64-hex-digit id
+   ["[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*"
+    ["a@b.co" "user.name+tag@example.com" "no-at-sign" "a@@b" ""]]
+   ["(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9]|0)\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9]|0)"
+    ["192.168.0.1" "255.255.255.255" "256.1.1.1" "1.2.3" "0.0.0.0"]]
+   ["(?i)^[-+]?(?:\\d+\\.?\\d*|\\.\\d+)(px|em|rem|%|vw|vh|vmin|vmax|ch|ex|pt|pc|in|cm|mm|q)$"
+    ["12px" "-1.5em" "3" "12 px" "1.5REM"]]
+   ["[0-9a-f]{64}"
+    ["0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcde"
+     "zzzz"]]])
 
 ;; JS RegExp has no inline (?i) -- it is a FLAG there. The corpus keeps the
 ;; inline spelling because that is how the 38 case-insensitive literals in the
@@ -121,23 +150,46 @@
 
 ;; --- the guest ------------------------------------------------------------
 
-(defn program->doc
-  "The program as the ESM ABI wants it: a document value."
+(defn- hex [n width]
+  (let [h (.toString (js/Number n) 16)]
+    (str (apply str (repeat (- width (count h)) "0")) h)))
+
+(defn program->text
+  "The wire format `kotoba/pattern_vm.kotoba` reads:
+
+     header  \"K\" fold(1) nc(6) nr(6)
+     code    nc x [ op(1) a(6) b(6) c(1) ]
+     ranges  nr x [ lo(6) hi(6) ]
+
+   The document form's class TABLE becomes inline ranges named by (first,
+   count), so the instruction that used a class index carries the span."
   [{:keys [code classes fold]}]
-  #js ["map"
-       #js [#js [#js ["keyword" ":classes"]
-                 #js ["vector" (into-array (map (fn [c] #js ["vector" (into-array (map (fn [n] #js ["i64" (js/BigInt n)]) c))]) classes))]]
-            #js [#js ["keyword" ":code"]
-                 #js ["vector" (into-array (map (fn [i] #js ["vector" (into-array (map (fn [n] #js ["i64" (js/BigInt n)]) i))]) code))]]
-            #js [#js ["keyword" ":fold"] #js ["bool" (boolean fold)]]]])
+  (let [;; flatten the class table, remembering where each class landed
+        spans (reduce (fn [{:keys [at out]} c]
+                        {:at (+ at (quot (count c) 2))
+                         :out (conj out [at (quot (count c) 2)])})
+                      {:at 0 :out []} classes)
+        ranges (vec (mapcat identity classes))
+        ins (fn [[op a b c]]
+              (str (hex op 1) (hex (or a 0) 6) (hex (or b 0) 6) (hex (or c 0) 1)))
+        code-text (apply str
+                        (for [[op a b] code]
+                          (if (= op 1)
+                            (let [[first-range n] (nth (:out spans) a)]
+                              (ins [1 first-range n (or b 0)]))
+                            (ins [op a b 0]))))
+        range-text (apply str (for [i (range 0 (count ranges) 2)]
+                                (str (hex (nth ranges i) 6) (hex (nth ranges (inc i)) 6))))]
+    (str "K" (if fold "1" "0") (hex (count code) 6) (hex (quot (count ranges) 2) 6)
+         code-text range-text)))
 
 (defn main []
   (when-not (zero? (:exit (sh "kotoba" ["--help"])))
     (println "REFUSED: the kotoba CLI is not runnable here (measured by running it)")
     (js/process.exit 2))
-  (let [dir (fs/mkdtempSync (path/join (os/tmpdir) "pattern-parity-"))
-        out (path/join dir "pattern_core.mjs")
-        c (sh "kotoba" ["-M" "compile" (path/join repo-root "kotoba" "pattern_core.kotoba")
+  (let [dir (fs/mkdtempSync (path/join (os/tmpdir) "vm-parity-"))
+        out (path/join dir "pattern_vm.mjs")
+        c (sh "kotoba" ["-M" "compile" (path/join repo-root "kotoba" "pattern_vm.kotoba")
                         "--target" "js" "--fuel" (str fuel) "--output" out])]
     (when-not (zero? (:exit c))
       (println "compile failed:" (:err c))
@@ -155,20 +207,30 @@
                             (.apply (aget inst export) inst (clj->js args)))
                           (catch :default e (str "TRAP: " (.-message e)))))]
              (doseq [[re inputs] corpus]
-               (let [prog (program->doc (pc/compile-pattern re))]
+               (let [prog (program->text (pc/compile-pattern re))
+                     ;; `search-start` restarts the match at every position, so
+                     ;; on a 257-instruction program over a 25-character input
+                     ;; it is 25 full runs. Measured 2026-09-09: one anchored
+                     ;; `match?` of the email pattern is 3.5s in the emitted
+                     ;; ESM (20.4s before the bitset), so the search form is
+                     ;; minutes. The big-program cases therefore check the
+                     ;; anchored answer only, and say so rather than quietly
+                     ;; skipping half a check.
+                     heavy? (> (count (:code (pc/compile-pattern re))) 40)]
                  (doseq [s inputs]
                    (check! (str "match? /" re "/ " (pr-str s))
                            (re-full-match? re s)
                            (call "match?" prog s))
-                   (check! (str "search-start /" re "/ " (pr-str s))
-                           (re-search-start re s)
-                           (js/Number (call "search-start" prog s))))))
+                   (when-not heavy?
+                     (check! (str "search-start /" re "/ " (pr-str s))
+                             (re-search-start re s)
+                             (js/Number (call "search-start" prog s)))))))
              ;; the two deliberate differences, pinned
-             (let [dot (program->doc (pc/compile-pattern "a.b"))]
+             (let [dot (program->text (pc/compile-pattern "a.b"))]
                (check! "`.` matches a newline here, unlike JS"
                        [false true]
                        [(re-full-match? "a.b" "a\nb") (call "match?" dot "a\nb")]))
-             (let [alt (program->doc (pc/compile-pattern "a|ab"))]
+             (let [alt (program->text (pc/compile-pattern "a|ab"))]
                (check! "leftmost-LONGEST, unlike JS's leftmost-first"
                        [1 2]
                        [(.-length (aget (.exec (js/RegExp. "a|ab") "ab") 0))
@@ -186,9 +248,9 @@
                    (println "  FAIL refusal of" re "\n    expected:" why "\n    actual:  " (pr-str refused)))))
              (println (str "SCANNED\t" @checks))
              (println (if (zero? @failures)
-                        (str "pattern parity: " @checks "/" @checks
+                        (str "vm parity: " @checks "/" @checks
                              " agree with the host's RegExp (fuel " fuel ")")
-                        (str "pattern parity: " (- @checks @failures) "/" @checks " DISAGREE")))
+                        (str "vm parity: " (- @checks @failures) "/" @checks " DISAGREE")))
              (js/process.exit (if (zero? @failures) 0 1)))))
         (.catch (fn [e] (println "ERROR" (str e)) (js/process.exit 1))))))
 
