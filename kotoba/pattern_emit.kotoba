@@ -29,12 +29,13 @@
   ;; number does not depend on anything downstream.
   (:export [main compile-text compile-program
             emit-alt emit-cat emit-atom emit-quant hex6 ins error? error-of
-            group-number count-groups leading-modes leading-width
+            group-number count-groups leading-modes leading-width emit-look
             test-literal test-class test-alternation test-anchor
             test-group test-escape test-refusals
             test-star test-plus test-opt test-count test-count-range
             test-capture-number test-capture-emit test-capture-noncapturing
-            test-leading-modes test-mode-header])
+            test-leading-modes test-mode-header
+            test-lookahead-emit test-lookbehind-still-refused])
   (:schemas {:em/cur [:record :em/cur
                       [[:s :string] [:i :i64] [:stop :i64] [:base :i64]
                        [:ranges :string] [:nr :i64]]]
@@ -298,6 +299,38 @@
   ;; the group opening AT i is the (count before it) + 1
   (+ 1 (app (ref count-groups) (record-new [:ref :em/gc] s 0 i false 0))))
 
+;; A lookaround is the sub-pattern's own code, bracketed by an instruction
+;; that runs it as a zero-width test:
+;;
+;;   base      look(a = base+1, b = base+L+2, c = negated)
+;;   base+1    ... the sub-pattern, L instructions ...
+;;   base+L+1  match          <- ends the nested run
+;;   base+L+2  whatever follows
+;;
+;; The `match` is what stops the nested run: op 6 wins and no thread steps
+;; past it, so the sub-code cannot run on into the outer program.
+(defn emit-look [x [:ref :em/cur] neg :i64] :document
+  (let [s (record-get x :s)
+        i (record-get x :i)
+        stop (record-get x :stop)
+        base (record-get x :base)
+        ranges (record-get x :ranges)
+        nr (record-get x :nr)
+        inner (app (ref emit-alt)
+                   (record-new [:ref :em/cur] s (+ i 3) stop (+ base 1) ranges nr))]
+    (if (app (ref error?) inner)
+      inner
+      (if (= 41 (app (ref cp-at) s (app (ref di) inner :i)))
+        (let [code (app (ref dstr) inner :code)
+              l (app (ref code-len) code)]
+          (app (ref ok)
+               (string-concat
+                (app (ref ins) 9 (+ base 1) (+ base (+ l 2)) neg)
+                (string-concat code (app (ref ins) 6 0 0 0)))
+               (app (ref dstr) inner :ranges)
+               (app (ref di) inner :nr) (+ (app (ref di) inner :i) 1)))
+        (app (ref error-of) :group/unterminated i)))))
+
 (defn emit-group [x [:ref :em/cur]] :document
   (let [s (record-get x :s)
         i (record-get x :i)
@@ -306,8 +339,14 @@
         ranges (record-get x :ranges)
         nr (record-get x :nr)
         q (app (ref cp-at) s (+ i 1))
-        group? (if (= q 63) (= 58 (app (ref cp-at) s (+ i 2))) false)]
-    (if (if (= q 63) (not group?) false)
+        after (app (ref cp-at) s (+ i 2))
+        group? (if (= q 63) (= 58 after) false)
+        ;; `(?=` positive, `(?!` negative -- both zero-width
+        look? (if (= q 63) (if (= 61 after) true (= 33 after)) false)
+        look-neg (if (= 33 after) 1 0)]
+    (if look?
+      (app (ref emit-look) x look-neg)
+      (if (if (= q 63) (not group?) false)
       (app (ref error-of) :group/inline-flags i)
       ;; A capturing group is the same program with a `save` on each side, so
       ;; the inner emitter is told a base one instruction further along and the
@@ -329,7 +368,7 @@
                    (app (ref dstr) inner :code))
                  (app (ref dstr) inner :ranges)
                  (app (ref di) inner :nr) (+ (app (ref di) inner :i) 1))
-            (app (ref error-of) :group/unterminated i)))))))
+            (app (ref error-of) :group/unterminated i))))))))
 
 (defn emit-atom [x [:ref :em/cur]] :document
   (let [s (record-get x :s)
@@ -694,10 +733,16 @@
     0
     (+ 1 (app (ref close-paren-at) (record-new [:ref :em/gc] re 2 0 false 0)))))
 
+;; `(?=` and `(?!` are emitted since 2026-09-09 and are no longer refused here.
+;; `(?<` still is, and the reason is upstream rather than in this file: a
+;; lookbehind needs a backward scan, the scan needs its own function, and that
+;; function joins the machine's recursion group -- which is where amu runs out
+;; of heap. Measured 2026-09-09: `pattern-vm`'s group compiles at 6 members and
+;; OOMs at 7, and a synthetic group of eight trivial mutually recursive
+;; functions OOMs while five, seven, nine through twelve compile.
+;; `test/lookbehind_probe.cljs` fails when that stops being true.
 (defn refused-shape [body :string] :keyword
-  (if (string-contains? body "(?=") :refused/lookahead
-      (if (string-contains? body "(?!") :refused/lookahead
-          (if (string-contains? body "(?<") :refused/lookbehind :none))))
+  (if (string-contains? body "(?<") :refused/lookbehind :none))
 
 ;; The nibble after "K" is a bitfield now, not a bool: bit 0 fold, bit 1
 ;; dotall, bit 2 multiline. `0` and `1` still mean what they meant, so every
@@ -870,6 +915,27 @@
                       (and (string=? "K0000003000000" (string-substring (app (ref compile-text) "ab") 0 14))
                            (string=? (string-substring (app (ref compile-text) "(?i)ab") 14 42)
                                      (string-substring (app (ref compile-text) "ab") 14 42))))))))
+
+(defn test-lookahead-emit [] :bool
+  ;; a(?=b)c  ->  char a / look(2,4) / char b / match / char c / match
+  (let [t (app (ref compile-text) "a(?=b)c")]
+    (and (string=? "K0000006000000" (string-substring t 0 14))
+         (and (string=? "00000610000000" (string-substring t 14 28))
+              (and (string=? "90000020000040" (string-substring t 28 42))
+                   (and (string=? "00000620000000" (string-substring t 42 56))
+                        (and (string=? "60000000000000" (string-substring t 56 70))
+                             (and (string=? "00000630000000" (string-substring t 70 84))
+                                  ;; the negative form differs in one nibble
+                                  (string=? "90000020000041"
+                                            (string-substring (app (ref compile-text) "a(?!b)c") 28 42))))))))))
+
+(defn test-lookbehind-still-refused [] :bool
+  ;; ⚠ This is a BLOCK, not a design decision. It is refused because the
+  ;; backward scan it needs is a seventh member of the machine's recursion
+  ;; group and amu runs out of heap there. `test/lookbehind_probe.cljs` is the
+  ;; removal condition and fails when this stops being true.
+  (and (string-contains? (app (ref compile-text) "(?<=a)b") ":refused/lookbehind")
+       (string-contains? (app (ref compile-text) "(?<!a)b") ":refused/lookbehind")))
 
 (defn main []
   (string-length (app (ref compile-text) "ab")))
