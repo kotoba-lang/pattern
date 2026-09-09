@@ -29,7 +29,20 @@ So: one scanner, in a library, driven by data.
 | | |
 |---|---|
 | `kotoba/pattern_core.kotoba` | the machine. Takes a program and a string, answers `match?` / `search-start` / `search-end` / `search` |
-| `src/pattern/compile.cljc` | the regex subset → program compiler. Host-side, portable `.cljc` |
+| `kotoba/pattern_compile.kotoba` | the regex subset → program compiler, **in Kotoba** |
+| `src/pattern/compile.cljc` | the same compiler, kept as the parity **oracle** |
+
+Both compilers are run over every unique regex literal in the browser stack and
+their programs compared instruction for instruction (`test/compile_parity.cljs`).
+The `.cljc` is no longer the implementation — it is what the port is checked
+against.
+
+The Kotoba compiler is written in the pure S-expression core: calls are
+`(app (ref f) x)`, control is `if` and `let`, and the sugar (`cond`, `and`,
+`or`, threading) is not used. Per the grammar's own measurement `(app (ref f) n)`
+and `(f n)` produce the same HIR, the same KIR and the same bytes, so this is a
+surface convention — one spelling per meaning, which is what DefCID is computed
+over.
 
 ```clojure
 (require '[pattern.compile :as pc])
@@ -75,6 +88,32 @@ test rather than left to be discovered:
 * the machine is leftmost-**longest**; JS is leftmost-first. For `a|ab`
   against `"ab"` the machine answers 2 and JS answers 1.
 
+## The ceiling this port found
+
+A `:document` is bounded: **depth 8, 256 nodes, 32 items per container**
+(`osaho/src/kotoba/kir/value.cljc`). The port carries both its AST and its
+program as documents, so measured over the 200-pattern corpus:
+
+| | |
+|---|---|
+| identical programs | **140** |
+| both compilers refused | **17** |
+| over a document bound | **43** (32 depth, 10 vector size, 1 node count) |
+| semantic disagreements | **0** |
+
+Every pattern that *fits* compiles to the identical program. What is left is a
+value-shape ceiling, not a difference of meaning — and it is a real ceiling for
+this library's purpose: **a program of more than 32 instructions cannot be a
+guest document at all.**
+
+There is no large homogeneous sequence in the guest to escape into —
+`[:vector T]` is a heterogeneous TUPLE type, bounded, and no backend has a
+sequence parameter type. The way out is to carry the program as a **`:string`**
+(the value limit is 65536 bytes) and index into it, which lifts the ceiling by
+about 300× and is the next slice. `test/compile_parity.cljs` holds 43 as a
+RATCHET: it fails if a semantic disagreement appears and it fails if that
+number moves either way.
+
 ## How much of the real corpus this admits
 
 Measured 2026-09-09 by compiling every unique regex literal in `htmldom`,
@@ -109,6 +148,13 @@ kotoba -M compile "$PWD/kotoba/pattern_core.kotoba" --target js --fuel 200000 --
 ```bash
 # 216 checks against the host's own RegExp, through the ESM amu emitted
 nbb --classpath src test/pattern_parity.cljs
+
+# the Kotoba compiler against the .cljc oracle, over the whole browser-stack corpus
+nbb --classpath src test/compile_parity.cljs
+
+# the compiler's own tests. 8/8 on :jvm-kir; five trap on :js and :wasm under
+# the runner's fixed fuel, which --fuel does not change (measured)
+kotoba -M test "$PWD/kotoba/pattern_compile.kotoba"
 
 # the upstream limitation this library works around, so nobody has to remember
 nbb test/entry_probe.cljs
