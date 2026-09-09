@@ -371,10 +371,14 @@
                                    w sp))
                   (app (ref set-add) list blen pc slots))))))))))
 
-(defn start-list [prog :string bol :bool eol :bool blen :i64 w :i64 sp :i64] :string
+;; `pos` rather than the two flags it used to take: with `w` and the slot
+;; position added this was six parameters, one past `:max-parameters 5`, and
+;; both flags are functions of `pos` anyway.
+(defn start-list [prog :string pos :i64 len :i64 blen :i64 w :i64] :string
   (app (ref add-thread)
-       (record-new [:ref :pat/add] prog (app (ref new-set) blen) 0 bol eol blen
-                   (app (ref no-slots) (quot (- w 6) 6)) w sp)))
+       (record-new [:ref :pat/add] prog (app (ref new-set) blen) 0
+                   (= pos 0) (>= pos len) blen
+                   (app (ref no-slots) (quot (- w 6) 6)) w pos)))
 
 ;; --- one input position ---------------------------------------------------
 
@@ -494,7 +498,7 @@
         w (app (ref width-of) prog)]
     (app (ref run-from)
          (record-new [:ref :pat/run] prog
-                     (app (ref start-list) prog (= pos 0) (>= pos len) blen w pos)
+                     (app (ref start-list) prog pos len blen w)
                      s pos len blen w))))
 
 (defn verdict-end [v :string] :i64

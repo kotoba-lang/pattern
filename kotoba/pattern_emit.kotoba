@@ -739,5 +739,35 @@
    ;; a{2,} : two copies then a* = 2 + 3 + match
    (string=? "K0000006000000" (string-substring (app (ref compile-text) "a{2,}") 0 14))))
 
+(defn test-capture-number [] :bool
+  ;; the source's numbering: the count of capturing `(` at or before this one
+  (and (= 1 (app (ref group-number) "(a)(b)" 0))
+       (and (= 2 (app (ref group-number) "(a)(b)" 3))
+            ;; `(?:` does not consume a number
+            (and (= 1 (app (ref group-number) "(?:a)(b)" 5))
+                 ;; `(` inside a class is a literal, not a group
+                 (and (= 1 (app (ref group-number) "[(](x)" 3))
+                      ;; and an escaped one is a literal too
+                      (= 1 (app (ref group-number) "\\((x)" 2)))))))
+
+(defn test-capture-emit [] :bool
+  ;; (a) is save(0) char save(1) match -- four instructions, no ranges
+  (let [t (app (ref compile-text) "(a)")]
+    (and (string=? "K0000004000000" (string-substring t 0 14))
+         (and (string=? "50000000000000" (string-substring t 14 28))
+              (and (string=? "00000610000000" (string-substring t 28 42))
+                   (and (string=? "50000010000000" (string-substring t 42 56))
+                        (string=? "60000000000000" (string-substring t 56 70))))))))
+
+(defn test-capture-noncapturing [] :bool
+  ;; the same pattern without the capture emits no saves at all, which is what
+  ;; keeps a capture-free program byte for byte what it was before captures
+  (let [t (app (ref compile-text) "(?:a)")]
+    (and (string=? "K0000002000000" (string-substring t 0 14))
+         (and (string=? "00000610000000" (string-substring t 14 28))
+              ;; and a second group is numbered 2, so the slots do not collide
+              (string=? "50000020000000"
+                        (string-substring (app (ref compile-text) "(a)(b)") 42 56))))))
+
 (defn main []
   (string-length (app (ref compile-text) "ab")))
