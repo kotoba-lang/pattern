@@ -35,7 +35,7 @@
             ["node:fs" :as fs]
             ["node:os" :as os]
             ["node:path" :as path]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [pattern.compile :as pc]))
 
 (def script
