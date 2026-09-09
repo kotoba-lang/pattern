@@ -21,9 +21,11 @@
   ;; error" with no span. It lands separately, after this one is green.
   (:export [main compile-text compile-program
             emit-alt emit-cat emit-atom emit-quant hex6 ins error? error-of
+            group-number count-groups
             test-literal test-class test-alternation test-anchor
             test-group test-escape test-refusals
-            test-star test-plus test-opt test-count test-count-range])
+            test-star test-plus test-opt test-count test-count-range
+            test-capture-number test-capture-emit test-capture-noncapturing])
   (:schemas {:em/cur [:record :em/cur
                       [[:s :string] [:i :i64] [:stop :i64] [:base :i64]
                        [:ranges :string] [:nr :i64]]]
@@ -39,6 +41,9 @@
              :em/q [:record :em/q
                     [[:s :string] [:from :i64] [:to :i64] [:base :i64]
                      [:ranges :string] [:nr :i64]]]
+             :em/gc [:record :em/gc
+                     [[:s :string] [:i :i64] [:stop :i64]
+                      [:in-class :bool] [:acc :i64]]]
              :em/rep [:record :em/rep
                       [[:s :string] [:from :i64] [:to :i64] [:base :i64]
                        [:ranges :string] [:nr :i64] [:left :i64] [:code :string]]]}))
@@ -249,6 +254,41 @@
           (app (ref ok) (app (ref ins) 0 (app (ref escape-literal) e) 0 0)
                ranges nr (+ i 2)))))))
 
+;; --- capture numbering ----------------------------------------------------
+;;
+;; A group's number is the source's: the count of capturing `(` at or before
+;; it. Counting it here rather than threading a counter through every record
+;; keeps the emitter's one-pass shape -- the scan is over the pattern, which is
+;; already bounded, and a group number does not depend on anything downstream.
+;;
+;; What the scan must NOT count: `(` inside a character class (literal there),
+;; `(` after a backslash, and `(?` of any kind.
+(defn count-groups [x [:ref :em/gc]] :i64
+  (let [s (record-get x :s)
+        i (record-get x :i)
+        stop (record-get x :stop)
+        in-class (record-get x :in-class)
+        acc (record-get x :acc)]
+    (if (>= i stop)
+      acc
+      (let [cp (app (ref cp-at) s i)]
+        (if (= cp 92)
+          (app (ref count-groups) (record-new [:ref :em/gc] s (+ i 2) stop in-class acc))
+          (if in-class
+            (app (ref count-groups)
+                 (record-new [:ref :em/gc] s (+ i 1) stop (not (= cp 93)) acc))
+            (if (= cp 91)
+              (app (ref count-groups) (record-new [:ref :em/gc] s (+ i 1) stop true acc))
+              (app (ref count-groups)
+                   (record-new [:ref :em/gc] s (+ i 1) stop false
+                               (if (= cp 40)
+                                 (if (= 63 (app (ref cp-at) s (+ i 1))) acc (+ acc 1))
+                                 acc))))))))))
+
+(defn group-number [s :string i :i64] :i64
+  ;; the group opening AT i is the (count before it) + 1
+  (+ 1 (app (ref count-groups) (record-new [:ref :em/gc] s 0 i false 0))))
+
 (defn emit-group [x [:ref :em/cur]] :document
   (let [s (record-get x :s)
         i (record-get x :i)
@@ -260,13 +300,25 @@
         group? (if (= q 63) (= 58 (app (ref cp-at) s (+ i 2))) false)]
     (if (if (= q 63) (not group?) false)
       (app (ref error-of) :group/inline-flags i)
-      (let [inner (app (ref emit-alt)
+      ;; A capturing group is the same program with a `save` on each side, so
+      ;; the inner emitter is told a base one instruction further along and the
+      ;; two saves are wrapped around what it answers.
+      (let [cap (not group?)
+            g (if cap (app (ref group-number) s i) 0)
+            inner (app (ref emit-alt)
                        (record-new [:ref :em/cur] s (if group? (+ i 3) (+ i 1))
-                                   stop base ranges nr))]
+                                   stop (if cap (+ base 1) base) ranges nr))]
         (if (app (ref error?) inner)
           inner
           (if (= 41 (app (ref cp-at) s (app (ref di) inner :i)))
-            (app (ref ok) (app (ref dstr) inner :code) (app (ref dstr) inner :ranges)
+            (app (ref ok)
+                 (if cap
+                   (string-concat
+                    (app (ref ins) 5 (* 2 (- g 1)) 0 0)
+                    (string-concat (app (ref dstr) inner :code)
+                                   (app (ref ins) 5 (+ 1 (* 2 (- g 1))) 0 0)))
+                   (app (ref dstr) inner :code))
+                 (app (ref dstr) inner :ranges)
                  (app (ref di) inner :nr) (+ (app (ref di) inner :i) 1))
             (app (ref error-of) :group/unterminated i)))))))
 
