@@ -30,7 +30,8 @@ So: one scanner, in a library, driven by data.
 |---|---|
 | `kotoba/pattern_vm.kotoba` | the machine, over a program carried as a **string**: ~4,680 instructions |
 | `kotoba/pattern_core.kotoba` | the same machine over a program carried as a `:document`: 32 instructions, kept as the oracle |
-| `kotoba/pattern_compile.kotoba` | the regex subset → program compiler, **in Kotoba** |
+| `kotoba/pattern_emit.kotoba` | the compiler that emits the **string** program, with no tree on the way |
+| `kotoba/pattern_compile.kotoba` | the earlier compiler, emitting a `:document` program (32 instructions), kept as an oracle |
 | `src/pattern/compile.cljc` | the same compiler, kept as the parity **oracle** |
 
 Both compilers are run over every unique regex literal in the browser stack and
@@ -138,6 +139,39 @@ Three backend facts, each measured the hard way:
   a four-way branch.
 * **`mod` is not a builtin** here.
 
+## No tree, and no ceiling
+
+`pattern_compile` parses to a `:document` AST and emits a `:document` program,
+and 43 of the 200 corpus patterns exceed one of those bounds -- 32 of them by
+DEPTH, because a tree is exactly the shape a document cannot hold.
+
+`kotoba/pattern_emit.kotoba` builds no tree. Parse and emit are fused: each
+function answers the code it emitted AS THE STRING plus the source index it
+stopped at, and a quantifier does not need its operand as a value -- it needs
+it EMITTED AGAIN at another program counter, so it remembers the operand's
+SOURCE SPAN and re-runs the emitter over it. `a{3}` compiles the same three
+characters three times, which costs scanning and buys the absence of the tree.
+
+Measured over the same corpus, comparing the two compilers **through the
+machine** rather than by bytes (the `.cljc` shares a class table between
+identical classes and this one appends ranges where it meets them, so two
+correct programs differ in bytes; what has to agree is what they ACCEPT):
+
+| | |
+|---|---|
+| agreed through `pattern-vm` | **168** |
+| both refused | 16 |
+| over a document bound | **0** |
+| disagreements | **0** |
+
+Two bugs surfaced in one probe run while this landed, and both are the kind
+that reads as a plausible answer: re-emitting an operand's span looked at the
+character AT the span's end -- the quantifier itself -- and recursed forever
+(`a*`, `a+`, `a?`, `a{1,3}`, `a{2,}` all answered "Maximum call stack size
+exceeded" while a bare `a` was fine); and `{n}` took its hi from a field that
+the answer-builder fills with a STRING, which the i64 reader reads as 0, so
+`a{3}` was `a{3,0}` and refused itself.
+
 ## The bug the corpus was hiding
 
 `^(px|em)$` answered **false** for `"px"`. So did `^[-+]?[0-9]+$` for `"12"`.
@@ -213,7 +247,14 @@ nbb --classpath src test/vm_parity.cljs
 # the document-program machine, same corpus minus the big ones: 252 checks
 nbb --classpath src test/pattern_parity.cljs
 
-# the Kotoba compiler against the .cljc oracle, over the whole browser-stack corpus
+# the string emitter's own tests, through the artifact (-M test's fuel is fixed)
+nbb test/emit_selfcheck.cljs
+
+# the two compilers compared THROUGH the machine, over the browser-stack corpus
+nbb --classpath "src:$HOME/github/com-junkawasaki/orgs/kotoba-lang/text/src" \
+    test/emit_parity.cljs
+
+# the document-program compiler against the .cljc oracle, by bytes
 nbb --classpath src test/compile_parity.cljs
 
 # the compiler's own tests. 8/8 on :jvm-kir; five trap on :js and :wasm under
