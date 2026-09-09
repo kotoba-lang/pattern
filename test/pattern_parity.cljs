@@ -11,9 +11,12 @@
 ;;
 ;; Two differences are deliberate and asserted rather than hidden:
 ;;
-;;   * `.` matches a newline here. JS `.` does not (without the s flag).
-;;     Patterns containing `.` outside a class are compared only on inputs
-;;     with no newline, and the difference has its own check.
+;;   * ⚠ ONE difference used to be listed here that was not one. `.` matched
+;;     a newline, and this header called that deliberate, so the corpus
+;;     deliberately avoided newline inputs for `.` -- the suite was told to
+;;     look away from the very thing it would have caught. Corrected
+;;     2026-09-09: `.` excludes the line terminators, as JavaScript's does,
+;;     and the corpus now reaches it.
 ;;   * the machine is leftmost-LONGEST; JS RegExp is leftmost-first. For
 ;;     `a|ab` against "ab" the machine answers 2 and JS answers 1. Only the
 ;;     START of a search is compared, plus one case that pins the difference.
@@ -62,7 +65,14 @@
 ;; sides, a quantifier at exactly {n}.
 
 (def corpus
-  [["ab" ["ab" "a" "abc" "" "ba"]]
+  [;; --- `.` and a line terminator ------------------------------------------
+   ;; Absent until 2026-09-09, and deliberately so: the header called `.`
+   ;; matching a newline a deliberate difference, so no input reached it.
+   ["a.b" ["axb" "a\nb" "a\rb" "ab"]]
+   ["." ["a" "\n" "\r" ""]]
+   ["a.*b" ["ab" "axb" "a\nxb" "axxb"]]
+   ["[^x]" ["a" "\n" "x" ""]]
+   ["ab" ["ab" "a" "abc" "" "ba"]]
    ["a|b" ["a" "b" "c" "ab" ""]]
    ["[0-9]" ["0" "9" "5" "/" ":" "a" ""]]
    ["[0-9]+" ["0" "12345" "" "12a" "a12"]]
@@ -163,10 +173,10 @@
                    (check! (str "search-start /" re "/ " (pr-str s))
                            (re-search-start re s)
                            (js/Number (call "search-start" prog s))))))
-             ;; the two deliberate differences, pinned
+             ;; ONE deliberate difference, pinned -- the other was not one
              (let [dot (program->doc (pc/compile-pattern "a.b"))]
-               (check! "`.` matches a newline here, unlike JS"
-                       [false true]
+               (check! "`.` excludes a line terminator, as JS's does"
+                       [false false]
                        [(re-full-match? "a.b" "a\nb") (call "match?" dot "a\nb")]))
              (let [alt (program->doc (pc/compile-pattern "a|ab"))]
                (check! "leftmost-LONGEST, unlike JS's leftmost-first"

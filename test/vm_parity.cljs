@@ -19,9 +19,12 @@
 ;;
 ;; Two differences are deliberate and asserted rather than hidden:
 ;;
-;;   * `.` matches a newline here. JS `.` does not (without the s flag).
-;;     Patterns containing `.` outside a class are compared only on inputs
-;;     with no newline, and the difference has its own check.
+;;   * ⚠ ONE difference used to be listed here that was not one. `.` matched
+;;     a newline, and this header called that deliberate, so the corpus
+;;     deliberately avoided newline inputs for `.` -- the suite was told to
+;;     look away from the very thing it would have caught. Corrected
+;;     2026-09-09: `.` excludes the line terminators, as JavaScript's does,
+;;     and the corpus now reaches it.
 ;;   * the machine is leftmost-LONGEST; JS RegExp is leftmost-first. For
 ;;     `a|ab` against "ab" the machine answers 2 and JS answers 1. Only the
 ;;     START of a search is compared, plus one case that pins the difference.
@@ -96,6 +99,21 @@
    ;; make the dedup observable. Without them the corpus passed either way.
    ["(a+)+b" ["b" "ab" "aaab" "aaaa" ""
               "aaaaaaaaaaaaaaaaaaaaaaaa" "aaaaaaaaaaaaaaaaaaaaaaaab"]]
+
+   ;; --- `.` and a line terminator ------------------------------------------
+   ;;
+   ;; ⚠ Every one of these was absent until 2026-09-09, and `.` matched a
+   ;; newline here while JavaScript's did not. The suite was 270/270 green
+   ;; for days: no input in it put a terminator where a `.` was tested. This
+   ;; is the second time this corpus hid a bug of exactly that shape -- the
+   ;; first was the four `$`-terminated patterns above -- so the rule is
+   ;; the same one: a construct is not covered until an input REACHES it.
+   ["a.b" ["axb" "a\nb" "a\rb" "ab" "a\u2028b"]]
+   ["." ["a" "\n" "\r" "" "\u2029"]]
+   ["a.*b" ["ab" "axb" "a\nxb" "axxb"]]
+   ["[^x]" ["a" "\n" "x" ""]]
+   ["[^x]*" ["ab" "a\nb" "" "x"]]
+   ["(?i)A.B" ["axb" "a\nb" "AXB"]]
 
    ;; --- patterns that END in `$` -------------------------------------------
    ;;
@@ -226,9 +244,12 @@
                              (re-search-start re s)
                              (js/Number (call "search-start" prog s)))))))
              ;; the two deliberate differences, pinned
+             ;; The check that used to pin `.` matching a newline as a
+             ;; deliberate difference now pins the opposite: the two engines
+             ;; AGREE, and (?s) is what turns it back on.
              (let [dot (program->text (pc/compile-pattern "a.b"))]
-               (check! "`.` matches a newline here, unlike JS"
-                       [false true]
+               (check! "`.` excludes a line terminator, as JS's does"
+                       [false false]
                        [(re-full-match? "a.b" "a\nb") (call "match?" dot "a\nb")]))
              (let [alt (program->text (pc/compile-pattern "a|ab"))]
                (check! "leftmost-LONGEST, unlike JS's leftmost-first"

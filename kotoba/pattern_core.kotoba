@@ -48,9 +48,20 @@
   ;; the instruction set already reserves op 5 for it.
   ;;
   ;; No lookahead (3 uses in the corpus), no backreferences (0 uses), no
-  ;; non-greedy quantifiers. `.` matches any code point INCLUDING newline
-  ;; here, which differs from Clojure's default and is asserted in the parity
-  ;; test rather than left to be discovered.
+  ;; non-greedy quantifiers.
+  ;;
+  ;; ⚠ Until 2026-09-09 this paragraph said `.` matches any code point
+  ;; INCLUDING newline "which differs from Clojure's default and is asserted
+  ;; in the parity test rather than left to be discovered". That was an
+  ;; implementation state written up as a decision, and the write-up did real
+  ;; work: the parity corpus then deliberately avoided newline inputs for `.`,
+  ;; so the suite could not have caught it. `.` now excludes the line
+  ;; terminators, as it does everywhere else.
+  ;;
+  ;; This module has no `(?s)` to turn that back on -- its program is a
+  ;; `:document` with a single `:fold` flag and no room for a mode field.
+  ;; `pattern-vm` has one. That is a reason to use `pattern-vm`, not a reason
+  ;; to leave this one answering a different question from it.
   (:export [main
             op-char op-class op-any op-split op-jmp op-match op-bol op-eol
             program code-of classes-of fold-of code-count instruction-at
@@ -213,10 +224,22 @@
 
 ;; --- one input position ---------------------------------------------------
 
+;; JavaScript's set: LF, CR and the two Unicode separators. A negated class
+;; still matches them -- `[^x]` is not `.`.
+(defn line-terminator? [cp :i64] :bool
+  (if (= cp 10) true (if (= cp 13) true (if (= cp 8232) true (= cp 8233)))))
+
 (defn matches-here? [prog :document ins :document cp :i64] :bool
   (let [op (di ins 0)]
     (cond
-      (= op (op-any)) true
+      ;; ⚠ This was `true` -- `.` matched a line terminator -- until
+      ;; 2026-09-09, and the header below claimed the difference from
+      ;; JavaScript was deliberate and "asserted in the parity test rather
+      ;; than left to be discovered". It was neither deliberate nor a property
+      ;; of anything: nothing about a Pike VM requires `.` to take a newline,
+      ;; it is just what this line did. `pattern-vm` had the identical claim
+      ;; and the identical line.
+      (= op (op-any)) (not (line-terminator? cp))
       (= op (op-char))
       (if (fold-of prog)
         (= (fold-cp cp) (fold-cp (di ins 1)))

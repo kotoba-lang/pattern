@@ -37,8 +37,11 @@
 ;; Measured 2026-09-09, the day captures landed. Every entry is a language
 ;; feature this emitter does not have; none of them is in htmldom.
 (def ratchet
-  {":group/inline-flags"      5     ; (?m) (?s) (?is) -- cssom
-   ":quantifier/non-greedy"   3     ; *? +? -- cssom, css
+  ;; `:group/inline-flags` was 5 here on 2026-09-09 and is gone the same day:
+  ;; leading (?i)(?s)(?m) are admitted, so the entry had to LEAVE rather than
+  ;; sit at 5 granting room nothing uses. That is the second direction of the
+  ;; ratchet doing its job on its first day.
+  {":quantifier/non-greedy"   3     ; *? +? -- cssom, css
    ":refused/lookahead"       2})   ; (?=) (?<=) -- cssom
 
 (defn- sh [cmd args]
