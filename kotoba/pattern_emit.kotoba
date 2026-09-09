@@ -22,7 +22,8 @@
   (:export [main compile-text compile-program
             emit-alt emit-cat emit-atom emit-quant hex6 ins error? error-of
             test-literal test-class test-alternation test-anchor
-            test-group test-escape test-refusals])
+            test-group test-escape test-refusals
+            test-star test-plus test-opt test-count test-count-range])
   (:schemas {:em/cur [:record :em/cur
                       [[:s :string] [:i :i64] [:stop :i64] [:base :i64]
                        [:ranges :string] [:nr :i64]]]
