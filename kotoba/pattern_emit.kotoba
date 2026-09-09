@@ -765,9 +765,12 @@
   (let [t (app (ref compile-text) "(?:a)")]
     (and (string=? "K0000002000000" (string-substring t 0 14))
          (and (string=? "00000610000000" (string-substring t 14 28))
-              ;; and a second group is numbered 2, so the slots do not collide
-              (string=? "50000020000000"
-                        (string-substring (app (ref compile-text) "(a)(b)") 42 56))))))
+              ;; and a second group opens slot 2, so the two do not collide:
+              ;; (a)(b) is save0 char save1 save2 char save3 match
+              (let [two (app (ref compile-text) "(a)(b)")]
+                (and (string=? "50000010000000" (string-substring two 42 56))
+                     (and (string=? "50000020000000" (string-substring two 56 70))
+                          (string=? "50000030000000" (string-substring two 84 98)))))))))
 
 (defn main []
   (string-length (app (ref compile-text) "ab")))

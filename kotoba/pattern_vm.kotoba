@@ -755,8 +755,13 @@
     (and (= 2 (app (ref group-count) (app (ref p-nest))))
          (and (string=? "ab" (app (ref group-text) v "ab" 1))
               (and (string=? "a" (app (ref group-text) v "ab" 2))
-                   ;; the widened thread entry is arithmetic, so assert it
-                   (= 18 (app (ref width-of) (app (ref p-nest)))))))))
+                   ;; the widened thread entry is arithmetic, so assert it:
+                   ;; two groups are four slots, and 6 + 6*4 is 30
+                   (and (= 4 (app (ref nslots-of) (app (ref p-nest))))
+                        (and (= 30 (app (ref width-of) (app (ref p-nest))))
+                             ;; and a capture-free program is still 6, which is
+                             ;; the entry this VM had before captures
+                             (= 6 (app (ref width-of) (app (ref p-ab)))))))))))
 
 (defn main []
   (app (ref prog-count) (p-ab)))
