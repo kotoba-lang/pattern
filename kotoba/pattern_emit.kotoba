@@ -372,7 +372,12 @@
         j (app (ref di) lo :i)
         c (app (ref cp-at) s j)]
     (if (= c 125)
-      (app (ref ok) "" "" (app (ref di) lo :nr) (+ j 1))
+      ;; {n}: hi = lo. `ok` would put a STRING in :code and `di` of a string is
+      ;; 0, so `a{3}` read as `a{3,0}` and answered :count/backwards.
+      (document-map :code (document-i64 (app (ref di) lo :nr))
+                    :ranges (document-string "")
+                    :nr (document-i64 (app (ref di) lo :nr))
+                    :i (document-i64 (+ j 1)))
       (if (= c 44)
         (let [hi (app (ref digits-from) s (+ j 1) 0)
               k (app (ref di) hi :i)]
@@ -511,7 +516,15 @@
                                  (+ base (app (ref code-len) code)) ranges nr))]
         (if (app (ref error?) one)
           one
-          (if (app (ref quantifier?) (app (ref cp-at) s (app (ref di) one :i)))
+          ;; ⚠ `stop` matters here. Re-emitting an operand's span calls this
+          ;; with stop = the span's end, and without the bound the character
+          ;; AT that end -- the quantifier itself -- reads as a quantifier
+          ;; again and the emitter recurses forever. Measured 2026-09-09:
+          ;; every one of `a*`, `a+`, `a?`, `a{1,3}`, `a{2,}` answered
+          ;; "Maximum call stack size exceeded", and `a` alone was fine.
+          (if (if (< (app (ref di) one :i) stop)
+                (app (ref quantifier?) (app (ref cp-at) s (app (ref di) one :i)))
+                false)
             ;; the atom is quantified: its SOURCE SPAN is re-emitted under the
             ;; quantifier, at the counter the code so far ends on
             (let [q (app (ref emit-quant)
