@@ -1,7 +1,8 @@
 ;; NOT COMPILED INTO THE LIBRARY. This is `pattern-vm` as it would be WITH
 ;; lookbehind: identical except for `behind-scan`, the backward scan the
 ;; feature needs. That one function is the SEVENTH member of the machine's
-;; recursion group, and amu runs out of heap there -- measured 2026-09-09.
+;; recursion group, and amu runs out of heap there -- kotoba-lang/amu#915,
+;; measured 2026-09-09.
 ;;
 ;; `test/lookbehind_probe.cljs` compiles this and expects it to FAIL. On the
 ;; day amu can compile it the probe goes red, and lookbehind stops being

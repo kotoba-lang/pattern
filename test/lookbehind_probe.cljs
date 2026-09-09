@@ -8,7 +8,7 @@
 ;; at 7; a synthetic group of eight trivial mutually recursive functions OOMs
 ;; while five, seven and nine through twelve compile. So it is not a simple
 ;; size threshold, and it is not a Kotoba language limit either -- mutual
-;; recursion is admitted and gets a group CID.
+;; recursion is admitted and gets a group CID. Filed as kotoba-lang/amu#915.
 ;;
 ;; `test/fixtures/pattern_vm_with_lookbehind.kotoba` is the module that would
 ;; ship if it compiled. This probe compiles it and EXPECTS FAILURE. The day amu

@@ -740,7 +740,8 @@
 ;; of heap. Measured 2026-09-09: `pattern-vm`'s group compiles at 6 members and
 ;; OOMs at 7, and a synthetic group of eight trivial mutually recursive
 ;; functions OOMs while five, seven, nine through twelve compile.
-;; `test/lookbehind_probe.cljs` fails when that stops being true.
+;; kotoba-lang/amu#915. `test/lookbehind_probe.cljs` fails when that stops
+;; being true.
 (defn refused-shape [body :string] :keyword
   (if (string-contains? body "(?<") :refused/lookbehind :none))
 
