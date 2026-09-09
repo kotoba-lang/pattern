@@ -1,0 +1,15 @@
+(ns pattern-emit
+  ;; WIP: the regex-subset compiler emitting the STRING program `pattern-vm`
+  ;; reads, and building no tree on the way. Committed before it compiles, on
+  ;; purpose -- the first attempt at this file lived untracked in a worktree
+  ;; for forty minutes and something removed the worktree. CLAUDE.md already
+  ;; says WIP belongs in a commit on a session branch rather than anywhere
+  ;; else; an untracked file in a worktree looks CLEAN to a retirement sweep.
+  (:export [main compile-text])
+  (:schemas {:em/x [:record :em/x [[:s :string] [:i :i64]]]}))
+
+(defn compile-text [re :string] :string
+  re)
+
+(defn main []
+  (string-length (app (ref compile-text) "ab")))
