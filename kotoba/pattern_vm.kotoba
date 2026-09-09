@@ -907,3 +907,5 @@
 
 (defn main []
   (app (ref prog-count) (p-ab)))
+
+;; slice in progress: opcode 9 look -- (?=) (?!) (?<=) (?<!).
