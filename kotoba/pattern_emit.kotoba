@@ -15,15 +15,25 @@
   ;; Program counters are absolute: every emitter is told the `base` it will
   ;; sit at, so nothing is patched and nothing is shifted afterwards.
   ;;
-  ;; This slice has no quantifiers. `*`, `+`, `?` and `{n,m}` need the operand
-  ;; EMITTED AGAIN at another program counter, which is a second cycle through
-  ;; the emitter, and the version that had it answered "internal compiler
-  ;; error" with no span. It lands separately, after this one is green.
+  ;; ⚠ This paragraph said "this slice has no quantifiers" until 2026-09-09,
+  ;; and by then `*`, `+`, `?` and `{n,m}` had all landed -- the exports right
+  ;; below it already named five quantifier tests. The header outlived the
+  ;; ceiling it described, which is the exact shape this workspace keeps
+  ;; warning about, so: quantifiers are here, and so are captures.
+  ;;
+  ;; A capturing `(` emits `save(2(g-1))` before the group and
+  ;; `save(2(g-1)+1)` after it; `(?:` emits neither, so a pattern with no
+  ;; capture compiles to the byte-identical program it did before. The group
+  ;; NUMBER is the source's -- the count of capturing `(` at or before this
+  ;; one, scanned rather than threaded through the records, because a group
+  ;; number does not depend on anything downstream.
   (:export [main compile-text compile-program
             emit-alt emit-cat emit-atom emit-quant hex6 ins error? error-of
+            group-number count-groups
             test-literal test-class test-alternation test-anchor
             test-group test-escape test-refusals
-            test-star test-plus test-opt test-count test-count-range])
+            test-star test-plus test-opt test-count test-count-range
+            test-capture-number test-capture-emit test-capture-noncapturing])
   (:schemas {:em/cur [:record :em/cur
                       [[:s :string] [:i :i64] [:stop :i64] [:base :i64]
                        [:ranges :string] [:nr :i64]]]
@@ -39,6 +49,9 @@
              :em/q [:record :em/q
                     [[:s :string] [:from :i64] [:to :i64] [:base :i64]
                      [:ranges :string] [:nr :i64]]]
+             :em/gc [:record :em/gc
+                     [[:s :string] [:i :i64] [:stop :i64]
+                      [:in-class :bool] [:acc :i64]]]
              :em/rep [:record :em/rep
                       [[:s :string] [:from :i64] [:to :i64] [:base :i64]
                        [:ranges :string] [:nr :i64] [:left :i64] [:code :string]]]}))
@@ -249,6 +262,41 @@
           (app (ref ok) (app (ref ins) 0 (app (ref escape-literal) e) 0 0)
                ranges nr (+ i 2)))))))
 
+;; --- capture numbering ----------------------------------------------------
+;;
+;; A group's number is the source's: the count of capturing `(` at or before
+;; it. Counting it here rather than threading a counter through every record
+;; keeps the emitter's one-pass shape -- the scan is over the pattern, which is
+;; already bounded, and a group number does not depend on anything downstream.
+;;
+;; What the scan must NOT count: `(` inside a character class (literal there),
+;; `(` after a backslash, and `(?` of any kind.
+(defn count-groups [x [:ref :em/gc]] :i64
+  (let [s (record-get x :s)
+        i (record-get x :i)
+        stop (record-get x :stop)
+        in-class (record-get x :in-class)
+        acc (record-get x :acc)]
+    (if (>= i stop)
+      acc
+      (let [cp (app (ref cp-at) s i)]
+        (if (= cp 92)
+          (app (ref count-groups) (record-new [:ref :em/gc] s (+ i 2) stop in-class acc))
+          (if in-class
+            (app (ref count-groups)
+                 (record-new [:ref :em/gc] s (+ i 1) stop (not (= cp 93)) acc))
+            (if (= cp 91)
+              (app (ref count-groups) (record-new [:ref :em/gc] s (+ i 1) stop true acc))
+              (app (ref count-groups)
+                   (record-new [:ref :em/gc] s (+ i 1) stop false
+                               (if (= cp 40)
+                                 (if (= 63 (app (ref cp-at) s (+ i 1))) acc (+ acc 1))
+                                 acc))))))))))
+
+(defn group-number [s :string i :i64] :i64
+  ;; the group opening AT i is the (count before it) + 1
+  (+ 1 (app (ref count-groups) (record-new [:ref :em/gc] s 0 i false 0))))
+
 (defn emit-group [x [:ref :em/cur]] :document
   (let [s (record-get x :s)
         i (record-get x :i)
@@ -260,13 +308,25 @@
         group? (if (= q 63) (= 58 (app (ref cp-at) s (+ i 2))) false)]
     (if (if (= q 63) (not group?) false)
       (app (ref error-of) :group/inline-flags i)
-      (let [inner (app (ref emit-alt)
+      ;; A capturing group is the same program with a `save` on each side, so
+      ;; the inner emitter is told a base one instruction further along and the
+      ;; two saves are wrapped around what it answers.
+      (let [cap (not group?)
+            g (if cap (app (ref group-number) s i) 0)
+            inner (app (ref emit-alt)
                        (record-new [:ref :em/cur] s (if group? (+ i 3) (+ i 1))
-                                   stop base ranges nr))]
+                                   stop (if cap (+ base 1) base) ranges nr))]
         (if (app (ref error?) inner)
           inner
           (if (= 41 (app (ref cp-at) s (app (ref di) inner :i)))
-            (app (ref ok) (app (ref dstr) inner :code) (app (ref dstr) inner :ranges)
+            (app (ref ok)
+                 (if cap
+                   (string-concat
+                    (app (ref ins) 5 (* 2 (- g 1)) 0 0)
+                    (string-concat (app (ref dstr) inner :code)
+                                   (app (ref ins) 5 (+ 1 (* 2 (- g 1))) 0 0)))
+                   (app (ref dstr) inner :code))
+                 (app (ref dstr) inner :ranges)
                  (app (ref di) inner :nr) (+ (app (ref di) inner :i) 1))
             (app (ref error-of) :group/unterminated i)))))))
 
@@ -686,6 +746,39 @@
    (string=? "K0000006000000" (string-substring (app (ref compile-text) "a{1,3}") 0 14))
    ;; a{2,} : two copies then a* = 2 + 3 + match
    (string=? "K0000006000000" (string-substring (app (ref compile-text) "a{2,}") 0 14))))
+
+(defn test-capture-number [] :bool
+  ;; the source's numbering: the count of capturing `(` at or before this one
+  (and (= 1 (app (ref group-number) "(a)(b)" 0))
+       (and (= 2 (app (ref group-number) "(a)(b)" 3))
+            ;; `(?:` does not consume a number
+            (and (= 1 (app (ref group-number) "(?:a)(b)" 5))
+                 ;; `(` inside a class is a literal, not a group
+                 (and (= 1 (app (ref group-number) "[(](x)" 3))
+                      ;; and an escaped one is a literal too
+                      (= 1 (app (ref group-number) "\\((x)" 2)))))))
+
+(defn test-capture-emit [] :bool
+  ;; (a) is save(0) char save(1) match -- four instructions, no ranges
+  (let [t (app (ref compile-text) "(a)")]
+    (and (string=? "K0000004000000" (string-substring t 0 14))
+         (and (string=? "50000000000000" (string-substring t 14 28))
+              (and (string=? "00000610000000" (string-substring t 28 42))
+                   (and (string=? "50000010000000" (string-substring t 42 56))
+                        (string=? "60000000000000" (string-substring t 56 70))))))))
+
+(defn test-capture-noncapturing [] :bool
+  ;; the same pattern without the capture emits no saves at all, which is what
+  ;; keeps a capture-free program byte for byte what it was before captures
+  (let [t (app (ref compile-text) "(?:a)")]
+    (and (string=? "K0000002000000" (string-substring t 0 14))
+         (and (string=? "00000610000000" (string-substring t 14 28))
+              ;; and a second group opens slot 2, so the two do not collide:
+              ;; (a)(b) is save0 char save1 save2 char save3 match
+              (let [two (app (ref compile-text) "(a)(b)")]
+                (and (string=? "50000010000000" (string-substring two 42 56))
+                     (and (string=? "50000020000000" (string-substring two 56 70))
+                          (string=? "50000030000000" (string-substring two 84 98)))))))))
 
 (defn main []
   (string-length (app (ref compile-text) "ab")))

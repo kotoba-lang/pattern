@@ -28,8 +28,33 @@
   ;;
   ;;   op 0 char   a = code point        op 4 jmp    a = pc
   ;;   op 1 class  a = first range, b = range count, c = negated
-  ;;   op 2 any                          op 6 match
-  ;;   op 3 split  a = pc, b = pc        op 7 bol    op 8 eol
+  ;;   op 2 any                          op 5 save   a = slot
+  ;;   op 3 split  a = pc, b = pc        op 6 match
+  ;;                                     op 7 bol    op 8 eol
+  ;;
+  ;; ## Captures
+  ;;
+  ;; `save` writes the current input position into a thread's slot, so a
+  ;; thread entry is `pc(6)` followed by `nslots` slots and the entry width is
+  ;; `6 + 6*nslots`. A program with no `save` has nslots 0 and width 6, which
+  ;; is byte for byte the entry this VM carried before captures existed --
+  ;; the capture-free path is not a special case, it is nslots = 0, and the
+  ;; 270-check parity suite is what says so.
+  ;;
+  ;; nslots is SCANNED from the code rather than carried in the header:
+  ;; widening the header would invalidate every program literal already
+  ;; compiled and committed (kiyaku carries six), and the scan is bounded by
+  ;; the instruction count.
+  ;;
+  ;; ⚠ This is a Pike VM: leftmost-LONGEST (POSIX). JavaScript backtracks:
+  ;; leftmost-FIRST (Perl). On `(a|ab)` against "ab" this takes "ab" and
+  ;; JavaScript takes "a", and both are right for their semantics. Measured
+  ;; 2026-09-09 over the 60 corpus patterns that have groups: the two agree on
+  ;; every one of 1277 checks, and the divergence appears only in the probe
+  ;; written for it -- but preferring the shortest match instead makes 86 of
+  ;; those checks diverge, so the corpus is not blind to match length, it just
+  ;; never distinguishes longest from first. `test/capture_parity.cljs` asserts
+  ;; the divergence in the direction it exists.
   ;;
   ;; Fixed width on purpose: an instruction is addressed by arithmetic, so
   ;; nothing has to be scanned to find it. The class table is inline and an
@@ -50,26 +75,38 @@
   (:export [main
             prog-fold? prog-count range-count
             ins-op ins-a ins-b ins-c range-lo range-hi
-            hex-at
+            hex-at nslots-of width-of
             match? search search-start search-end
+            find found? group-count group-start group-end group-text
             test-hex test-header test-literal test-class test-quantifier
-            test-alternation test-anchor test-search test-fold test-bounded])
+            test-alternation test-anchor test-search test-fold test-bounded
+            test-capture test-capture-optional test-capture-nested])
   (:schemas {:pat/hex [:record :pat/hex [[:s :string] [:i :i64] [:n :i64] [:acc :i64]]]
+             ;; `slots`, `w` and `sp` are the capture machinery. A program
+             ;; with no `save` has `w` 6 and `slots` "", which is byte for byte
+             ;; the thread entry this VM carried before captures existed.
              :pat/add [:record :pat/add
                        [[:prog :string] [:list :string] [:pc :i64]
-                        [:bol :bool] [:eol :bool] [:blen :i64]]]
+                        [:bol :bool] [:eol :bool] [:blen :i64]
+                        [:slots :string] [:w :i64] [:sp :i64]]]
              :pat/threads [:record :pat/threads
                            [[:prog :string] [:list :string] [:i :i64]
-                            [:cp :i64] [:next :string] [:blen :i64] [:eol :bool]]]
+                            [:cp :i64] [:next :string] [:blen :i64] [:eol :bool]
+                            [:w :i64] [:sp :i64]]]
              :pat/run [:record :pat/run
                        [[:prog :string] [:list :string] [:s :string]
-                        [:pos :i64] [:len :i64] [:blen :i64]]]
+                        [:pos :i64] [:len :i64] [:blen :i64] [:w :i64]]]
              :pat/scan [:record :pat/scan
                         [[:prog :string] [:s :string] [:pos :i64]
                          [:len :i64] [:want-end :bool]]]
              :pat/range [:record :pat/range
                          [[:prog :string] [:i :i64] [:n :i64] [:cp :i64]]]
-             :pat/zeros [:record :pat/zeros [[:acc :string] [:n :i64]]]}))
+             :pat/zeros [:record :pat/zeros [[:acc :string] [:n :i64]]]
+             :pat/fills [:record :pat/fills [[:acc :string] [:n :i64]]]
+             :pat/slot [:record :pat/slot
+                        [[:slots :string] [:k :i64] [:pos :i64]]]
+             :pat/scan-ng [:record :pat/scan-ng
+                           [[:prog :string] [:pc :i64] [:n :i64] [:acc :i64]]]}))
 
 ;; --- hex ------------------------------------------------------------------
 
@@ -216,6 +253,64 @@
        (app (ref hex-digit-char) (app (ref nibble) (quot n 16)))
        (app (ref hex-digit-char) (app (ref nibble) n))))))))
 
+;; --- capture slots --------------------------------------------------------
+;;
+;; A thread entry is `pc(6)` followed by `nslots` slots of 6 hex each, so the
+;; entry width `w` is `6 + 6*nslots`. A program with no `save` has nslots 0 and
+;; w 6, which is exactly the entry this VM carried before captures existed --
+;; the capture-free path is not a special case, it is nslots = 0.
+;;
+;; The unset slot is `ffffff`. Positions are byte offsets into a `:string`,
+;; capped at 65536, so the sentinel cannot collide with a real one.
+
+(defn fills [x [:ref :pat/fills]] :string
+  (let [acc (record-get x :acc)
+        n (record-get x :n)]
+    (if (<= n 0)
+      acc
+      (app (ref fills) (record-new [:ref :pat/fills] (string-concat acc "f") (- n 1))))))
+
+(defn slot-unset [] :i64
+  16777215)
+
+;; nslots = 1 + the largest slot index any `save` names, or 0 when there is no
+;; `save` at all. Scanned once per top-level call rather than carried in the
+;; header: widening the header would invalidate every program literal already
+;; compiled and committed, and this pass is bounded by the instruction count.
+(defn scan-ng [x [:ref :pat/scan-ng]] :i64
+  (let [prog (record-get x :prog)
+        pc (record-get x :pc)
+        n (record-get x :n)
+        acc (record-get x :acc)]
+    (if (>= pc n)
+      acc
+      (app (ref scan-ng)
+           (record-new [:ref :pat/scan-ng] prog (+ pc 1) n
+                       (if (= 5 (app (ref ins-op) prog pc))
+                         (let [k (+ 1 (app (ref ins-a) prog pc))]
+                           (if (> k acc) k acc))
+                         acc))))))
+
+(defn nslots-of [prog :string] :i64
+  (app (ref scan-ng)
+       (record-new [:ref :pat/scan-ng] prog 0 (app (ref prog-count) prog) 0)))
+
+(defn width-of [prog :string] :i64
+  (+ 6 (* 6 (app (ref nslots-of) prog))))
+
+(defn no-slots [nslots :i64] :string
+  (app (ref fills) (record-new [:ref :pat/fills] "" (* 6 nslots))))
+
+(defn slot-set [x [:ref :pat/slot]] :string
+  (let [slots (record-get x :slots)
+        k (record-get x :k)
+        pos (record-get x :pos)
+        at (* k 6)]
+    (string-concat (string-substring slots 0 at)
+                   (string-concat (app (ref hex6) pos)
+                                  (string-substring slots (+ at 6)
+                                                    (string-length slots))))))
+
 ;; `bit-shift-left` is not the name here -- the builtin is `i64-shift-left`
 ;; ("nearest defined: i32-shift-left (builtin), i64-shift-left (builtin)",
 ;; measured 2026-09-09). Four bits per hex digit, so the shift is 0..3.
@@ -237,7 +332,7 @@
 (defn set-has? [set :string pc :i64] :bool
   (app (ref bit-set?) (app (ref hex-at) set (quot pc 4) 1) (app (ref bit-of) pc)))
 
-(defn set-add [set :string blen :i64 pc :i64] :string
+(defn set-add [set :string blen :i64 pc :i64 slots :string] :string
   (let [at (quot pc 4)
         v (app (ref bit-of) pc)
         d (app (ref hex-at) set at 1)
@@ -245,13 +340,17 @@
     (string-concat
      (string-concat (string-substring set 0 at) (app (ref hex-digit-char) d2))
      (string-concat (string-substring set (+ at 1) (string-length set))
-                    (app (ref hex6) pc)))))
+                    (string-concat (app (ref hex6) pc) slots)))))
 
-(defn thread-count [set :string blen :i64] :i64
-  (quot (- (string-length set) blen) 6))
+(defn thread-count [set :string blen :i64 w :i64] :i64
+  (quot (- (string-length set) blen) w))
 
-(defn pc-at [set :string blen :i64 i :i64] :i64
-  (app (ref hex-at) set (+ blen (* i 6)) 6))
+(defn pc-at [set :string blen :i64 w :i64 i :i64] :i64
+  (app (ref hex-at) set (+ blen (* i w)) 6))
+
+(defn slots-at [set :string blen :i64 w :i64 i :i64] :string
+  (let [at (+ blen (+ (* i w) 6))]
+    (string-substring set at (+ at (- w 6)))))
 
 ;; Epsilon closure: split, jmp and the anchors cost no input, so a thread that
 ;; lands on one keeps moving within the same step.
@@ -261,30 +360,50 @@
         pc (record-get x :pc)
         bol (record-get x :bol)
         eol (record-get x :eol)
-        blen (record-get x :blen)]
+        blen (record-get x :blen)
+        slots (record-get x :slots)
+        w (record-get x :w)
+        sp (record-get x :sp)]
     (if (if (app (ref set-has?) list pc) true (>= pc (app (ref prog-count) prog)))
       list
       (let [op (app (ref ins-op) prog pc)]
         (if (= op 4)
-          (app (ref add-thread) (record-new [:ref :pat/add] prog list (app (ref ins-a) prog pc) bol eol blen))
+          (app (ref add-thread) (record-new [:ref :pat/add] prog list (app (ref ins-a) prog pc) bol eol blen slots w sp))
           (if (= op 3)
             (app (ref add-thread)
                  (record-new [:ref :pat/add] prog
                              (app (ref add-thread)
-                                  (record-new [:ref :pat/add] prog list (app (ref ins-a) prog pc) bol eol blen))
-                             (app (ref ins-b) prog pc) bol eol blen))
+                                  (record-new [:ref :pat/add] prog list (app (ref ins-a) prog pc) bol eol blen slots w sp))
+                             (app (ref ins-b) prog pc) bol eol blen slots w sp))
             (if (= op 7)
               (if bol
-                (app (ref add-thread) (record-new [:ref :pat/add] prog list (+ pc 1) bol eol blen))
+                (app (ref add-thread) (record-new [:ref :pat/add] prog list (+ pc 1) bol eol blen slots w sp))
                 list)
               (if (= op 8)
                 (if eol
-                  (app (ref add-thread) (record-new [:ref :pat/add] prog list (+ pc 1) bol eol blen))
+                  (app (ref add-thread) (record-new [:ref :pat/add] prog list (+ pc 1) bol eol blen slots w sp))
                   list)
-                (app (ref set-add) list blen pc)))))))))
+                ;; `save` costs no input either, so it belongs in the closure
+                ;; with split, jmp and the anchors -- writing the slot and
+                ;; walking on with the WRITTEN slots, not the ones it was
+                ;; handed.
+                (if (= op 5)
+                  (app (ref add-thread)
+                       (record-new [:ref :pat/add] prog list (+ pc 1) bol eol blen
+                                   (app (ref slot-set)
+                                        (record-new [:ref :pat/slot] slots
+                                                    (app (ref ins-a) prog pc) sp))
+                                   w sp))
+                  (app (ref set-add) list blen pc slots))))))))))
 
-(defn start-list [prog :string bol :bool eol :bool blen :i64] :string
-  (app (ref add-thread) (record-new [:ref :pat/add] prog (app (ref new-set) blen) 0 bol eol blen)))
+;; `pos` rather than the two flags it used to take: with `w` and the slot
+;; position added this was six parameters, one past `:max-parameters 5`, and
+;; both flags are functions of `pos` anyway.
+(defn start-list [prog :string pos :i64 len :i64 blen :i64 w :i64] :string
+  (app (ref add-thread)
+       (record-new [:ref :pat/add] prog (app (ref new-set) blen) 0
+                   (= pos 0) (>= pos len) blen
+                   (app (ref no-slots) (quot (- w 6) 6)) w pos)))
 
 ;; --- one input position ---------------------------------------------------
 
@@ -307,16 +426,23 @@
               (app (ref in-class?) prog first count neg cp)))
           false)))))
 
-(defn any-match? [x [:ref :pat/threads]] :bool
+;; The index of the first thread sitting on `match`, or -1. First rather than
+;; any, because the thread list is in priority order and its slots are the ones
+;; the answer reports.
+(defn win-index [x [:ref :pat/threads]] :i64
   (let [prog (record-get x :prog)
         list (record-get x :list)
         i (record-get x :i)
-        blen (record-get x :blen)]
-    (if (>= i (app (ref thread-count) list blen))
-      false
-      (if (= 6 (app (ref ins-op) prog (app (ref pc-at) list blen i)))
-        true
-        (app (ref any-match?) (record-new [:ref :pat/threads] prog list (+ i 1) 0 "" blen false))))))
+        blen (record-get x :blen)
+        w (record-get x :w)]
+    (if (>= i (app (ref thread-count) list blen w))
+      -1
+      (if (= 6 (app (ref ins-op) prog (app (ref pc-at) list blen w i)))
+        i
+        (app (ref win-index) (record-new [:ref :pat/threads] prog list (+ i 1) 0 "" blen false w 0))))))
+
+(defn any-match? [x [:ref :pat/threads]] :bool
+  (>= (app (ref win-index) x) 0))
 
 ;; ⚠ `eol` is the flag for the position the surviving threads land ON, not the
 ;; one they left. Passing `false` here drops every thread that steps onto a `$`
@@ -336,33 +462,48 @@
         cp (record-get x :cp)
         next (record-get x :next)
         blen (record-get x :blen)
-        eol (record-get x :eol)]
-    (if (>= i (app (ref thread-count) list blen))
+        eol (record-get x :eol)
+        w (record-get x :w)
+        sp (record-get x :sp)]
+    (if (>= i (app (ref thread-count) list blen w))
       next
-      (let [pc (app (ref pc-at) list blen i)]
+      (let [pc (app (ref pc-at) list blen w i)]
         (app (ref step-threads)
              (record-new [:ref :pat/threads] prog list (+ i 1) cp
                          (if (app (ref matches-here?) prog pc cp)
                            (app (ref add-thread)
-                                (record-new [:ref :pat/add] prog next (+ pc 1) false eol blen))
+                                (record-new [:ref :pat/add] prog next (+ pc 1) false eol blen
+                                            (app (ref slots-at) list blen w i) w sp))
                            next)
-                         blen eol))))))
+                         blen eol w sp))))))
 
 ;; --- running --------------------------------------------------------------
 
-(defn run-from [x [:ref :pat/run]] :i64
+;; The verdict is a STRING rather than the end position alone, because a match
+;; has to carry its capture slots out with it and there is one return value.
+;;
+;;   ""                    no match from here
+;;   end(6) ++ slots       the longest match, and the slots of the thread that
+;;                         made it
+;;
+;; A capture-free program has empty slots, so the verdict is 6 characters and
+;; `match-end-at` reads exactly what it read before.
+(defn run-from [x [:ref :pat/run]] :string
   (let [prog (record-get x :prog)
         list (record-get x :list)
         s (record-get x :s)
         pos (record-get x :pos)
         len (record-get x :len)
-        blen (record-get x :blen)]
-    (if (= 0 (app (ref thread-count) list blen))
-      -1
-      (let [here (if (app (ref any-match?)
-                          (record-new [:ref :pat/threads] prog list 0 0 "" blen false))
-                   pos
-                   -1)]
+        blen (record-get x :blen)
+        w (record-get x :w)]
+    (if (= 0 (app (ref thread-count) list blen w))
+      ""
+      (let [wi (app (ref win-index)
+                    (record-new [:ref :pat/threads] prog list 0 0 "" blen false w 0))
+            here (if (>= wi 0)
+                   (string-concat (app (ref hex6) pos)
+                                  (app (ref slots-at) list blen w wi))
+                   "")]
         (if (>= pos len)
           here
           (let [cp (string-code-point-at s pos)
@@ -371,17 +512,25 @@
                             (record-new [:ref :pat/run] prog
                                         (app (ref step-threads)
                                              (record-new [:ref :pat/threads] prog list 0 cp
-                                                         (app (ref new-set) blen) blen (>= nxt len)))
-                                        s nxt len blen))]
-            (if (>= deeper 0) deeper here)))))))
+                                                         (app (ref new-set) blen) blen (>= nxt len)
+                                                         w nxt))
+                                        s nxt len blen w))]
+            (if (> (string-length deeper) 0) deeper here)))))))
 
-(defn match-end-at [prog :string s :string pos :i64] :i64
+(defn run-at [prog :string s :string pos :i64] :string
   (let [len (string-length s)
-        blen (app (ref bits-len) prog)]
+        blen (app (ref bits-len) prog)
+        w (app (ref width-of) prog)]
     (app (ref run-from)
          (record-new [:ref :pat/run] prog
-                     (app (ref start-list) prog (= pos 0) (>= pos len) blen)
-                     s pos len blen))))
+                     (app (ref start-list) prog pos len blen w)
+                     s pos len blen w))))
+
+(defn verdict-end [v :string] :i64
+  (if (= 0 (string-length v)) -1 (app (ref hex-at) v 0 6)))
+
+(defn match-end-at [prog :string s :string pos :i64] :i64
+  (app (ref verdict-end) (app (ref run-at) prog s pos)))
 
 (defn match? [prog :string s :string] :bool
   (= (string-length s) (app (ref match-end-at) prog s 0)))
@@ -414,6 +563,55 @@
     (if (< start 0)
       (document-null)
       (document-map :start (document-i64 start) :end (document-i64 end)))))
+
+;; --- captures -------------------------------------------------------------
+;;
+;; `find` answers the whole verdict for the leftmost match, so a caller reads
+;; group 0 and every explicit group out of ONE run rather than re-running the
+;; machine per group. The empty string means no match anywhere.
+;;
+;; Group numbering is the source's: group 1 is the first `(` that is not
+;; `(?:`. Slots 2k and 2k+1 hold group (k+1)'s start and end, and a group that
+;; did not participate in the match keeps `ffffff` in both.
+
+(defn find [prog :string s :string] :string
+  (let [start (app (ref search-start) prog s)]
+    (if (< start 0)
+      ""
+      (string-concat (app (ref hex6) start) (app (ref run-at) prog s start)))))
+
+(defn found? [v :string] :bool
+  (> (string-length v) 0))
+
+(defn group-count [prog :string] :i64
+  (quot (app (ref nslots-of) prog) 2))
+
+;; `find`'s verdict is start(6) ++ end(6) ++ slots, so group 0 is the two
+;; leading fields and group k>0 is slots 2(k-1) and 2(k-1)+1 after them.
+(defn slot-of [v :string k :i64] :i64
+  (let [raw (app (ref hex-at) v (+ 12 (* k 6)) 6)]
+    (if (= raw (app (ref slot-unset))) -1 raw)))
+
+(defn group-start [v :string g :i64] :i64
+  (if (= 0 (string-length v))
+    -1
+    (if (= g 0)
+      (app (ref hex-at) v 0 6)
+      (app (ref slot-of) v (* 2 (- g 1))))))
+
+(defn group-end [v :string g :i64] :i64
+  (if (= 0 (string-length v))
+    -1
+    (if (= g 0)
+      (app (ref hex-at) v 6 6)
+      (app (ref slot-of) v (+ 1 (* 2 (- g 1)))))))
+
+;; The captured text itself, or "" when the group did not participate. A caller
+;; that has to tell "" from "did not match" asks `group-start` for -1.
+(defn group-text [v :string s :string g :i64] :string
+  (let [a (app (ref group-start) v g)
+        b (app (ref group-end) v g)]
+    (if (< a 0) "" (if (< b a) "" (string-substring s a b)))))
 
 ;; --- tests ----------------------------------------------------------------
 ;;
@@ -531,6 +729,64 @@
 (defn test-bounded [] :bool
   (and (not (app (ref match?) (p-nested) "aaaaaaaaaaaaaaaaaaaaaaaa"))
        (app (ref match?) (p-nested) "aaaaaaaaaaaaaaaaaaaaaaaab")))
+
+;; --- capture tests ---------------------------------------------------------
+;;
+;; Hand-written in the format, like the rest: this module does not depend on
+;; the emitter, and a test that used it would be testing two things.
+
+;; (a)b
+(defn p-cap [] :string
+  "K00000050000005000000000000000000610000000500000100000000000062000000060000000000000")
+
+;; (a)?b -- the group may not participate
+(defn p-opt [] :string
+  "K0000006000000300000100000405000000000000000000610000000500000100000000000062000000060000000000000")
+
+;; ((a)b) -- group 1 is the whole thing, group 2 the inner
+(defn p-nest [] :string
+  "K000000700000050000000000000500000200000000000061000000050000030000000000006200000005000001000000060000000000000")
+
+(defn test-capture [] :bool
+  (let [v (app (ref find) (app (ref p-cap)) "xxab")]
+    (and (app (ref found?) v)
+         (and (= 2 (app (ref group-start) v 0))
+              (and (= 4 (app (ref group-end) v 0))
+                   (and (= 2 (app (ref group-start) v 1))
+                        (and (= 3 (app (ref group-end) v 1))
+                             (and (string=? "a" (app (ref group-text) v "xxab" 1))
+                                  (and (string=? "ab" (app (ref group-text) v "xxab" 0))
+                                       (and (= 1 (app (ref group-count) (app (ref p-cap))))
+                                            ;; a capture-free program still
+                                            ;; answers, with no groups
+                                            (= 0 (app (ref group-count) (app (ref p-ab))))))))))))))
+
+(defn test-capture-optional [] :bool
+  (let [hit (app (ref find) (app (ref p-opt)) "ab")
+        skip (app (ref find) (app (ref p-opt)) "b")
+        miss (app (ref find) (app (ref p-cap)) "zz")]
+    (and (= 0 (app (ref group-start) hit 1))
+         (and (= 1 (app (ref group-end) hit 1))
+              ;; the group did not participate: -1, not 0, and the text is ""
+              (and (= -1 (app (ref group-start) skip 1))
+                   (and (= -1 (app (ref group-end) skip 1))
+                        (and (string=? "" (app (ref group-text) skip "b" 1))
+                             (and (= 0 (app (ref group-start) skip 0))
+                                  (and (not (app (ref found?) miss))
+                                       (= -1 (app (ref group-start) miss 0)))))))))))
+
+(defn test-capture-nested [] :bool
+  (let [v (app (ref find) (app (ref p-nest)) "ab")]
+    (and (= 2 (app (ref group-count) (app (ref p-nest))))
+         (and (string=? "ab" (app (ref group-text) v "ab" 1))
+              (and (string=? "a" (app (ref group-text) v "ab" 2))
+                   ;; the widened thread entry is arithmetic, so assert it:
+                   ;; two groups are four slots, and 6 + 6*4 is 30
+                   (and (= 4 (app (ref nslots-of) (app (ref p-nest))))
+                        (and (= 30 (app (ref width-of) (app (ref p-nest))))
+                             ;; and a capture-free program is still 6, which is
+                             ;; the entry this VM had before captures
+                             (= 6 (app (ref width-of) (app (ref p-ab)))))))))))
 
 (defn main []
   (app (ref prog-count) (p-ab)))
