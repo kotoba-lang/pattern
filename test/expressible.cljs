@@ -41,8 +41,13 @@
   ;; leading (?i)(?s)(?m) are admitted, so the entry had to LEAVE rather than
   ;; sit at 5 granting room nothing uses. That is the second direction of the
   ;; ratchet doing its job on its first day.
+  ;; `:refused/lookahead` was 2 and is gone: `(?=` and `(?!` are emitted since
+  ;; 2026-09-09. One of those two patterns also has `(?<=`, so it moved to the
+  ;; lookbehind entry rather than disappearing -- which is why the total
+  ;; expressible count goes up by one, not two.
   {":quantifier/non-greedy"   3     ; *? +? -- cssom, css
-   ":refused/lookahead"       2})   ; (?=) (?<=) -- cssom
+   ":refused/lookbehind"      1})   ; (?<=) -- cssom, blocked upstream, see
+                                    ; test/lookbehind_probe.cljs
 
 (defn- sh [cmd args]
   (let [r (cp/spawnSync cmd (clj->js args) #js {:encoding "utf8" :timeout 900000})]

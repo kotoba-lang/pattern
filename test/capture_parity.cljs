@@ -141,6 +141,21 @@
                                        (println "    js    :" (pr-str theirs))
                                        (println "    kotoba:" (pr-str mine)))
                                    :else nil))))))))))
+               ;; ⚠ Captures inside a LOOKAROUND are not reported here and are
+               ;; in JavaScript: the nested run has its own slots and drops
+               ;; them when it answers. No corpus pattern puts a group inside a
+               ;; lookaround, and the emitter does not refuse one, so this is a
+               ;; real difference rather than a refusal -- pinned here so it is
+               ;; a known one.
+               (let [prog ((aget (.instantiateKotoba emit) "compile-text") "a(?=(b))")
+                     mine (kotoba-groups vm prog "ab" 1)
+                     theirs (js-groups "a(?=(b))" "ab")]
+                 (swap! checks inc)
+                 (when-not (and (= [0 1 -1 -1] mine) (= [0 1 1 2] theirs))
+                   (swap! failures inc)
+                   (println "  the lookaround-capture difference has moved:")
+                   (println "    expected kotoba [0 1 -1 -1] and js [0 1 1 2]")
+                   (println "    got      kotoba" (pr-str mine) "and js" (pr-str theirs))))
                ;; The divergence, asserted in the direction it exists. If this
                ;; VM ever becomes leftmost-first these two flip and the file
                ;; fails rather than quietly agreeing with JavaScript.

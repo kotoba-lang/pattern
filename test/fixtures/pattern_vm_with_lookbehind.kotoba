@@ -1,4 +1,13 @@
-(ns pattern-vm
+;; NOT COMPILED INTO THE LIBRARY. This is `pattern-vm` as it would be WITH
+;; lookbehind: identical except for `behind-scan`, the backward scan the
+;; feature needs. That one function is the SEVENTH member of the machine's
+;; recursion group, and amu runs out of heap there -- kotoba-lang/amu#915,
+;; measured 2026-09-09.
+;;
+;; `test/lookbehind_probe.cljs` compiles this and expects it to FAIL. On the
+;; day amu can compile it the probe goes red, and lookbehind stops being
+;; blocked. Nobody has to remember.
+(ns pattern-vm-with-lookbehind
   ;; The matcher again, over a program carried as a STRING.
   ;;
   ;; ## Why
@@ -660,9 +669,25 @@
 ;; O(sp) nested runs in the worst case, which is what an unbounded lookbehind
 ;; costs anywhere.
 
+(defn behind-scan [x [:ref :pat/behind]] :bool
+  (let [prog (record-get x :prog)
+        s (record-get x :s)
+        sp (record-get x :sp)
+        sub (record-get x :sub)
+        j (record-get x :j)]
+    (if (< j 0)
+      false
+      (if (= sp (app (ref verdict-end)
+                     (app (ref run-at-pc) prog (string-substring s 0 sp) j sub)))
+        true
+        (app (ref behind-scan)
+             (record-new [:ref :pat/behind] prog s sp sub (- j 1)))))))
+
 (defn look-hit? [prog :string s :string sp :i64 pc :i64] :bool
   (let [sub (app (ref ins-a) prog pc)]
-    (> (string-length (app (ref run-at-pc) prog s sp sub)) 0)))
+    (if (app (ref look-behind?) (app (ref ins-c) prog pc))
+      (app (ref behind-scan) (record-new [:ref :pat/behind] prog s sp sub sp))
+      (> (string-length (app (ref run-at-pc) prog s sp sub)) 0))))
 
 (defn verdict-end [v :string] :i64
   (if (= 0 (string-length v)) -1 (app (ref hex-at) v 0 6)))
