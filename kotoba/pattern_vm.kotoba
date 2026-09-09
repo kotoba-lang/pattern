@@ -790,3 +790,5 @@
 
 (defn main []
   (app (ref prog-count) (p-ab)))
+
+;; slice in progress: `.` must not match a line terminator, and (?s)/(?m).
