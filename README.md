@@ -28,7 +28,8 @@ So: one scanner, in a library, driven by data.
 
 | | |
 |---|---|
-| `kotoba/pattern_core.kotoba` | the machine. Takes a program and a string, answers `match?` / `search-start` / `search-end` / `search` |
+| `kotoba/pattern_vm.kotoba` | the machine, over a program carried as a **string**: ~4,680 instructions |
+| `kotoba/pattern_core.kotoba` | the same machine over a program carried as a `:document`: 32 instructions, kept as the oracle |
 | `kotoba/pattern_compile.kotoba` | the regex subset → program compiler, **in Kotoba** |
 | `src/pattern/compile.cljc` | the same compiler, kept as the parity **oracle** |
 
@@ -88,11 +89,70 @@ test rather than left to be discovered:
 * the machine is leftmost-**longest**; JS is leftmost-first. For `a|ab`
   against `"ab"` the machine answers 2 and JS answers 1.
 
-## The ceiling this port found
+## The ceiling, and the two moves that lifted it
 
 A `:document` is bounded: **depth 8, 256 nodes, 32 items per container**
-(`osaho/src/kotoba/kir/value.cljc`). The port carries both its AST and its
-program as documents, so measured over the 200-pattern corpus:
+(`osaho/src/kotoba/kir/value.cljc`). Everything else a guest can hold is
+bounded near 32 as well -- typed map 31, typed set 32, record 32 fields,
+heterogeneous vector 32 -- `[:vector T]` is a bounded TUPLE type, and no
+backend has a sequence parameter type. **The one unbounded-ish value is a
+`:string`, at 65536 bytes.**
+
+So `kotoba/pattern_vm.kotoba` carries the program as a string:
+
+```
+header  "K" fold(1) nc(6 hex) nr(6 hex)          14 chars
+code    nc x [ op(1) a(6) b(6) c(1) ]            14 chars each
+ranges  nr x [ lo(6) hi(6) ]                     12 chars each
+```
+
+65536 / 14 is about **4,680 instructions, against 32**. Measured on the real
+corpus: the IPv4 (88 instructions), the CSS length (82) and the 64-hex id (65)
+now run; as documents they could not be handed to the matcher at all.
+
+**Lifting one ceiling left the next one standing behind it.** The thread list
+was a document too, and 32 simultaneously-live threads is real: the
+257-instruction email pattern from `kiyaku` answered `doc-vector-too-large` on
+`"a@b.co"`. The thread set is now one string as well -- a bitset of visited
+program counters followed by the live list:
+
+```
+[ bits: ceil(nc/4) hex chars ][ pcs: 6 hex chars each ]
+```
+
+The bitset is not taste. With membership as a linear scan the same pattern
+took **20.4 seconds** for one `match?` (correct, but the dedup that keeps a
+Pike VM linear was itself quadratic in function entries, and fuel is charged
+per entry). With the bit test it is **3.5 seconds**; the 88- and
+65-instruction patterns are unchanged at 80 and 127 ms.
+
+### What the string form cost to write
+
+Three backend facts, each measured the hard way:
+
+* **`bit-and` / `bit-or` are refused by the JS backend** -- "unsupported KIR
+  operation" at the `:kotoba-script` phase, while `string-from-i64` compiles
+  there. The bit test is arithmetic: for a hex digit `d` and a bit value `v`,
+  the bit is set exactly when `(quot d v)` is odd.
+* **`i64-shift-left` takes a LITERAL count** in [0,63], so a computed shift is
+  a four-way branch.
+* **`mod` is not a builtin** here.
+
+## The bug the corpus was hiding
+
+`^(px|em)$` answered **false** for `"px"`. So did `^[-+]?[0-9]+$` for `"12"`.
+`^a$` for `"a"` was right, which is why it survived: the anchor is reached
+before any step.
+
+The `eol` flag handed to a step was the one for the position the threads LEFT,
+not the one they land on, so every thread that stepped onto a `$` was dropped.
+Both machines had it. **216 parity checks agreed with JavaScript without
+touching it, because the corpus contained no pattern ending in `$`.** It has
+four now, and both suites are green at 252 and 270 checks.
+
+## The 200-pattern compiler corpus
+
+Measured over the 200-pattern corpus, with the AST and program as documents:
 
 | | |
 |---|---|
@@ -146,7 +206,11 @@ kotoba -M compile "$PWD/kotoba/pattern_core.kotoba" --target js --fuel 200000 --
 ## Tests
 
 ```bash
-# 216 checks against the host's own RegExp, through the ESM amu emitted
+# the string-program machine against the host's own RegExp: 270 checks,
+# including four real patterns whose programs are far past 32 instructions
+nbb --classpath src test/vm_parity.cljs
+
+# the document-program machine, same corpus minus the big ones: 252 checks
 nbb --classpath src test/pattern_parity.cljs
 
 # the Kotoba compiler against the .cljc oracle, over the whole browser-stack corpus
