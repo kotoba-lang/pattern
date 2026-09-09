@@ -15,10 +15,18 @@
   ;; Program counters are absolute: every emitter is told the `base` it will
   ;; sit at, so nothing is patched and nothing is shifted afterwards.
   ;;
-  ;; This slice has no quantifiers. `*`, `+`, `?` and `{n,m}` need the operand
-  ;; EMITTED AGAIN at another program counter, which is a second cycle through
-  ;; the emitter, and the version that had it answered "internal compiler
-  ;; error" with no span. It lands separately, after this one is green.
+  ;; ⚠ This paragraph said "this slice has no quantifiers" until 2026-09-09,
+  ;; and by then `*`, `+`, `?` and `{n,m}` had all landed -- the exports right
+  ;; below it already named five quantifier tests. The header outlived the
+  ;; ceiling it described, which is the exact shape this workspace keeps
+  ;; warning about, so: quantifiers are here, and so are captures.
+  ;;
+  ;; A capturing `(` emits `save(2(g-1))` before the group and
+  ;; `save(2(g-1)+1)` after it; `(?:` emits neither, so a pattern with no
+  ;; capture compiles to the byte-identical program it did before. The group
+  ;; NUMBER is the source's -- the count of capturing `(` at or before this
+  ;; one, scanned rather than threaded through the records, because a group
+  ;; number does not depend on anything downstream.
   (:export [main compile-text compile-program
             emit-alt emit-cat emit-atom emit-quant hex6 ins error? error-of
             group-number count-groups

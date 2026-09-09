@@ -28,8 +28,33 @@
   ;;
   ;;   op 0 char   a = code point        op 4 jmp    a = pc
   ;;   op 1 class  a = first range, b = range count, c = negated
-  ;;   op 2 any                          op 6 match
-  ;;   op 3 split  a = pc, b = pc        op 7 bol    op 8 eol
+  ;;   op 2 any                          op 5 save   a = slot
+  ;;   op 3 split  a = pc, b = pc        op 6 match
+  ;;                                     op 7 bol    op 8 eol
+  ;;
+  ;; ## Captures
+  ;;
+  ;; `save` writes the current input position into a thread's slot, so a
+  ;; thread entry is `pc(6)` followed by `nslots` slots and the entry width is
+  ;; `6 + 6*nslots`. A program with no `save` has nslots 0 and width 6, which
+  ;; is byte for byte the entry this VM carried before captures existed --
+  ;; the capture-free path is not a special case, it is nslots = 0, and the
+  ;; 270-check parity suite is what says so.
+  ;;
+  ;; nslots is SCANNED from the code rather than carried in the header:
+  ;; widening the header would invalidate every program literal already
+  ;; compiled and committed (kiyaku carries six), and the scan is bounded by
+  ;; the instruction count.
+  ;;
+  ;; ⚠ This is a Pike VM: leftmost-LONGEST (POSIX). JavaScript backtracks:
+  ;; leftmost-FIRST (Perl). On `(a|ab)` against "ab" this takes "ab" and
+  ;; JavaScript takes "a", and both are right for their semantics. Measured
+  ;; 2026-09-09 over the 60 corpus patterns that have groups: the two agree on
+  ;; every one of 1277 checks, and the divergence appears only in the probe
+  ;; written for it -- but preferring the shortest match instead makes 86 of
+  ;; those checks diverge, so the corpus is not blind to match length, it just
+  ;; never distinguishes longest from first. `test/capture_parity.cljs` asserts
+  ;; the divergence in the direction it exists.
   ;;
   ;; Fixed width on purpose: an instruction is addressed by arithmetic, so
   ;; nothing has to be scanned to find it. The class table is inline and an
