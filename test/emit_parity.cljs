@@ -13,7 +13,11 @@
 ;;
 ;; Exit codes: 0 passed, 1 disagreement, 2 REFUSED.
 ;;
-;;   nbb --classpath src test/emit_parity.cljs
+;; The oracle requires `kotoba.lang.text`, so the sibling repo has to be on the
+;; classpath -- a worktree does not sit beside it:
+;;
+;;   nbb --classpath "src:$HOME/github/com-junkawasaki/orgs/kotoba-lang/text/src" \
+;;       test/emit_parity.cljs
 
 (ns emit-parity
   (:require ["node:child_process" :as cp]
