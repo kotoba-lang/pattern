@@ -95,7 +95,8 @@
            (fn [mods]
              (let [emit (aget mods 0)
                    vm (aget mods 1)
-                   compiled (atom 0) not-in-slice (atom 0) refused-both (atom 0) failures (atom 0)]
+                   compiled (atom 0) not-in-slice (atom 0) refused-both (atom 0)
+                   ahead (atom 0) failures (atom 0)]
                (doseq [re patterns]
                  (let [mine (try ((aget (.instantiateKotoba emit) "compile-text") re)
                                  (catch :default e (str "TRAP: " (.-message e))))
@@ -111,9 +112,20 @@
                              (println "  DISAGREE (this refused, the oracle did not)" (pr-str re))
                              (println "    " mine))))
 
+                     ;; The Kotoba emitter is AHEAD of the `.cljc` oracle on
+                     ;; leading inline flags since 2026-09-09: it compiles
+                     ;; `(?m)` / `(?s)` / `(?is)` and the oracle still refuses
+                     ;; them. That is not a disagreement about meaning -- there
+                     ;; is nothing to disagree with -- so it is counted under
+                     ;; its own name and ratcheted, rather than failing here or
+                     ;; being folded into "both refused" where it would vanish.
+                     ;; Those patterns are checked against JavaScript instead,
+                     ;; in `capture_parity` and the module self-checks.
                      (nil? theirs)
-                     (do (swap! failures inc)
-                         (println "  DISAGREE (the oracle refused, this did not)" (pr-str re)))
+                     (if (re-find #"^\(\?[ism]+\)" re)
+                       (swap! ahead inc)
+                       (do (swap! failures inc)
+                           (println "  DISAGREE (the oracle refused, this did not)" (pr-str re))))
 
                      :else
                      (let [answers (fn [prog]
@@ -130,13 +142,23 @@
                (println (str "SCANNED\t" (count patterns)))
                (println (str "  agreed through the machine: " (- @compiled @failures)
                              "   both refused: " @refused-both
+                             "   ahead of the .cljc oracle: " @ahead
                              "   quantifier (next slice): " @not-in-slice
                              "   disagreements: " @failures))
-               (println (if (zero? @failures)
-                          (str "emit parity: " (- @compiled @failures) "/" @compiled
-                               " agree with the .cljc oracle through pattern-vm")
-                          "emit parity: FAILED"))
-               (js/process.exit (if (zero? @failures) 0 1)))))
+               ;; Ratcheted, so "ahead" cannot quietly become the place
+               ;; disagreements go to hide. 5 leading-flag patterns, measured
+               ;; 2026-09-09; teaching the oracle inline flags lowers it.
+               (let [ahead-limit 5
+                     over (> @ahead ahead-limit)]
+                 (when over
+                   (println (str "  ahead of the oracle is " @ahead
+                                 ", over the ratchet of " ahead-limit)))
+                 (println (if (and (zero? @failures) (not over))
+                            (str "emit parity: " (- @compiled @failures) "/" @compiled
+                                 " agree with the .cljc oracle through pattern-vm"
+                                 " (+" @ahead " ahead of it)")
+                            "emit parity: FAILED"))
+                 (js/process.exit (if (and (zero? @failures) (not over)) 0 1))))))
           (.catch (fn [e] (println "ERROR" (str e)) (js/process.exit 1)))))))
 
 (main)
