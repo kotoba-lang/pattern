@@ -534,3 +534,7 @@
 
 (defn main []
   (app (ref prog-count) (p-ab)))
+
+;; --- captures (opcode 5 `save`) -- IN PROGRESS -----------------------------
+;; Stub committed before the work, so an interrupted session leaves the intent
+;; in git rather than only in an untracked worktree.
