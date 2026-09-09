@@ -31,7 +31,7 @@
   references, non-greedy quantifiers, and inline flags other than a leading
   (?i). `compile-pattern` throws with the offending construct; a pattern this
   cannot express must not compile to one that means something else."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 ;; --- instruction opcodes (kept in step with pattern_core.kotoba) ----------
 
