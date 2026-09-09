@@ -37,6 +37,14 @@
 ;; line terminator was invisible to this suite: both programs agreed with each
 ;; other because both were compiled from the same wrong assumption, and the
 ;; inputs never reached it.
+;; What the Kotoba emitter has that the `.cljc` oracle does not, with the
+;; count measured on the day it was gained. Each is a feature, not a bucket.
+(def ahead-features
+  [["leading inline flags" (fn [re] (re-find #"^\(\?[ism]+\)" re))]
+   ["lookahead"            (fn [re] (re-find #"\(\?[=!]" re))]])
+
+(def ahead-ratchet {"leading inline flags" 5 "lookahead" 1})
+
 (def inputs ["" "a" "0" "abc" "12" "px" "12px" " " "-1.5" "a@b.co" "]" "."
              "\n" "a\nb" "a\rb" "x\ny" "\r\n"])
 
@@ -96,7 +104,7 @@
              (let [emit (aget mods 0)
                    vm (aget mods 1)
                    compiled (atom 0) not-in-slice (atom 0) refused-both (atom 0)
-                   ahead (atom 0) failures (atom 0)]
+                   ahead (atom {}) failures (atom 0)]
                (doseq [re patterns]
                  (let [mine (try ((aget (.instantiateKotoba emit) "compile-text") re)
                                  (catch :default e (str "TRAP: " (.-message e))))
@@ -113,19 +121,35 @@
                              (println "    " mine))))
 
                      ;; The Kotoba emitter is AHEAD of the `.cljc` oracle on
-                     ;; leading inline flags since 2026-09-09: it compiles
-                     ;; `(?m)` / `(?s)` / `(?is)` and the oracle still refuses
-                     ;; them. That is not a disagreement about meaning -- there
-                     ;; is nothing to disagree with -- so it is counted under
-                     ;; its own name and ratcheted, rather than failing here or
-                     ;; being folded into "both refused" where it would vanish.
-                     ;; Those patterns are checked against JavaScript instead,
-                     ;; in `capture_parity` and the module self-checks.
+                     ;; some features now. That is not a disagreement about
+                     ;; meaning -- there is nothing to disagree with -- so it is
+                     ;; counted BY FEATURE and ratcheted per feature, rather
+                     ;; than failing here or being folded into "both refused"
+                     ;; where it would vanish. Counting by feature is meant to
+                     ;; stop "ahead" from becoming the drawer everything
+                     ;; unexplained goes into.
+                     ;;
+                     ;; ⚠ That last part is UNEXERCISED, and saying so is the
+                     ;; point. Measured 2026-09-10: replacing the lookahead
+                     ;; predicate with `(fn [re] true)` -- a catch-all -- changes
+                     ;; nothing, because every pattern that reaches this branch
+                     ;; today already matches a named feature. So the guard is
+                     ;; structural, not demonstrated: a trace never taken cannot
+                     ;; be told from one that cannot be taken. The first pattern
+                     ;; the oracle refuses for an unnamed reason is what will
+                     ;; prove it, and that is exactly when it matters.
+                     ;;
+                     ;; These patterns are checked against JavaScript instead,
+                     ;; in `capture_parity`, `lookbehind_probe` and the module
+                     ;; self-checks.
                      (nil? theirs)
-                     (if (re-find #"^\(\?[ism]+\)" re)
-                       (swap! ahead inc)
-                       (do (swap! failures inc)
-                           (println "  DISAGREE (the oracle refused, this did not)" (pr-str re))))
+                     (let [feature (some (fn [[name pred]] (when (pred re) name))
+                                         ahead-features)]
+                       (if feature
+                         (swap! ahead update feature (fnil inc 0))
+                         (do (swap! failures inc)
+                             (println "  DISAGREE (the oracle refused, this did not)"
+                                      (pr-str re)))))
 
                      :else
                      (let [answers (fn [prog]
@@ -140,25 +164,33 @@
                          (println "    kotoba:" (pr-str (answers mine)))
                          (println "    cljc  :" (pr-str (answers theirs))))))))
                (println (str "SCANNED\t" (count patterns)))
-               (println (str "  agreed through the machine: " (- @compiled @failures)
-                             "   both refused: " @refused-both
-                             "   ahead of the .cljc oracle: " @ahead
-                             "   quantifier (next slice): " @not-in-slice
-                             "   disagreements: " @failures))
-               ;; Ratcheted, so "ahead" cannot quietly become the place
-               ;; disagreements go to hide. 5 leading-flag patterns, measured
-               ;; 2026-09-09; teaching the oracle inline flags lowers it.
-               (let [ahead-limit 5
-                     over (> @ahead ahead-limit)]
-                 (when over
-                   (println (str "  ahead of the oracle is " @ahead
-                                 ", over the ratchet of " ahead-limit)))
-                 (println (if (and (zero? @failures) (not over))
-                            (str "emit parity: " (- @compiled @failures) "/" @compiled
-                                 " agree with the .cljc oracle through pattern-vm"
-                                 " (+" @ahead " ahead of it)")
-                            "emit parity: FAILED"))
-                 (js/process.exit (if (and (zero? @failures) (not over)) 0 1))))))
+               (let [ahead-total (reduce + 0 (vals @ahead))]
+                 (println (str "  agreed through the machine: " (- @compiled @failures)
+                               "   both refused: " @refused-both
+                               "   ahead of the .cljc oracle: " ahead-total
+                               "   quantifier (next slice): " @not-in-slice
+                               "   disagreements: " @failures))
+                 ;; Ratcheted per feature, in both directions: a feature that
+                 ;; grows is over, and a feature the table still claims that no
+                 ;; longer occurs is over too -- teaching the oracle a feature
+                 ;; must remove its entry rather than leave it granting room.
+                 (let [over (for [[name n] (sort @ahead)
+                                  :let [limit (get ahead-ratchet name 0)]]
+                              (do (println (str "    " name ": " n
+                                                (if (> n limit)
+                                                  (str "  OVER the ratchet of " limit) "")))
+                                  (if (> n limit) 1 0)))
+                       stale (remove (fn [[name _]] (contains? @ahead name)) ahead-ratchet)
+                       bad (+ (reduce + 0 over) (count stale))]
+                   (doseq [[name n] stale]
+                     (println (str "    " name " is in the ratchet at " n
+                                   " and no longer occurs -- remove the entry")))
+                   (println (if (and (zero? @failures) (zero? bad))
+                              (str "emit parity: " (- @compiled @failures) "/" @compiled
+                                   " agree with the .cljc oracle through pattern-vm"
+                                   " (+" ahead-total " ahead of it)")
+                              "emit parity: FAILED"))
+                   (js/process.exit (if (and (zero? @failures) (zero? bad)) 0 1)))))))
           (.catch (fn [e] (println "ERROR" (str e)) (js/process.exit 1)))))))
 
 (main)
