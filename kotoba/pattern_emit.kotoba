@@ -772,7 +772,11 @@
 (defn test-refusals [] :bool
   (and (string-contains? (app (ref compile-text) "(?=a)") ":refused/lookahead")
        (string-contains? (app (ref compile-text) "(a)\\1") ":escape/back-reference")
-       (string-contains? (app (ref compile-text) "(?m)^a") ":group/inline-flags")
+       ;; A LEADING flag group is admitted since 2026-09-09 -- this line used
+       ;; to assert `(?m)^a` was refused. What is still refused is a flag
+       ;; group in the MIDDLE, because modes live in the program header and
+       ;; would silently apply to the whole pattern.
+       (string-contains? (app (ref compile-text) "a(?m)b") ":group/inline-flags")
        (string-contains? (app (ref compile-text) "a*?") ":quantifier/non-greedy")
        (string-contains? (app (ref compile-text) "a+*") ":quantifier/stacked")))
 

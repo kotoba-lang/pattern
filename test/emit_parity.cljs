@@ -33,7 +33,12 @@
 (def repo-root (path/resolve (path/dirname (path/resolve script)) ".."))
 (def fuel 200000000)
 
-(def inputs ["" "a" "0" "abc" "12" "px" "12px" " " "-1.5" "a@b.co" "]" "."])
+;; ⚠ The newline inputs are here since 2026-09-09. Without them `.` matching a
+;; line terminator was invisible to this suite: both programs agreed with each
+;; other because both were compiled from the same wrong assumption, and the
+;; inputs never reached it.
+(def inputs ["" "a" "0" "abc" "12" "px" "12px" " " "-1.5" "a@b.co" "]" "."
+             "\n" "a\nb" "a\rb" "x\ny" "\r\n"])
 
 (defn- sh [cmd args]
   (let [r (cp/spawnSync cmd (clj->js args) #js {:encoding "utf8" :timeout 900000})]

@@ -97,6 +97,21 @@
    ["(a+)+b" ["b" "ab" "aaab" "aaaa" ""
               "aaaaaaaaaaaaaaaaaaaaaaaa" "aaaaaaaaaaaaaaaaaaaaaaaab"]]
 
+   ;; --- `.` and a line terminator ------------------------------------------
+   ;;
+   ;; ⚠ Every one of these was absent until 2026-09-09, and `.` matched a
+   ;; newline here while JavaScript's did not. The suite was 270/270 green
+   ;; for days: no input in it put a terminator where a `.` was tested. This
+   ;; is the second time this corpus hid a bug of exactly that shape -- the
+   ;; first was the four `$`-terminated patterns above -- so the rule is
+   ;; the same one: a construct is not covered until an input REACHES it.
+   ["a.b" ["axb" "a\nb" "a\rb" "ab" "a\u2028b"]]
+   ["." ["a" "\n" "\r" "" "\u2029"]]
+   ["a.*b" ["ab" "axb" "a\nxb" "axxb"]]
+   ["[^x]" ["a" "\n" "x" ""]]
+   ["[^x]*" ["ab" "a\nb" "" "x"]]
+   ["(?i)A.B" ["axb" "a\nb" "AXB"]]
+
    ;; --- patterns that END in `$` -------------------------------------------
    ;;
    ;; The corpus had none until 2026-09-09, and their absence hid a real bug:

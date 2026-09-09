@@ -73,14 +73,15 @@
   ;; `pattern-core` stays as the oracle: `test/vm_parity.cljs` runs both over
   ;; the same patterns, and the small ones must agree.
   (:export [main
-            prog-fold? prog-count range-count
+            prog-fold? prog-dotall? prog-multiline? prog-count range-count
             ins-op ins-a ins-b ins-c range-lo range-hi
             hex-at nslots-of width-of
             match? search search-start search-end
             find found? group-count group-start group-end group-text
             test-hex test-header test-literal test-class test-quantifier
             test-alternation test-anchor test-search test-fold test-bounded
-            test-capture test-capture-optional test-capture-nested])
+            test-capture test-capture-optional test-capture-nested
+            test-dot-excludes-newline test-mode-bits test-multiline-anchors])
   (:schemas {:pat/hex [:record :pat/hex [[:s :string] [:i :i64] [:n :i64] [:acc :i64]]]
              ;; `slots`, `w` and `sp` are the capture machinery. A program
              ;; with no `save` has `w` 6 and `slots` "", which is byte for byte
@@ -858,6 +859,51 @@
                              ;; and a capture-free program is still 6, which is
                              ;; the entry this VM had before captures
                              (= 6 (app (ref width-of) (app (ref p-ab)))))))))))
+
+;; --- dot and mode tests ----------------------------------------------------
+
+;; a.b  and the same program with the dotall bit set
+(defn p-dot [] :string
+  "K000000400000000000610000000200000000000000000062000000060000000000000")
+(defn p-dot-s [] :string
+  "K200000400000000000610000000200000000000000000062000000060000000000000")
+
+;; ^b$  and the same program with the multiline bit set
+(defn p-anch [] :string
+  "K000000400000070000000000000000006200000008000000000000060000000000000")
+(defn p-anch-m [] :string
+  "K400000400000070000000000000000006200000008000000000000060000000000000")
+
+(defn test-dot-excludes-newline [] :bool
+  ;; the bug this slice fixes: `.` answered true for a line terminator, and
+  ;; JavaScript's answers false
+  (and (app (ref match?) (app (ref p-dot)) "axb")
+       (and (not (app (ref match?) (app (ref p-dot)) "a\nb"))
+            (and (not (app (ref match?) (app (ref p-dot)) "a\rb"))
+                 ;; and the same program with the dotall bit takes them
+                 (and (app (ref match?) (app (ref p-dot-s)) "a\nb")
+                      (and (app (ref match?) (app (ref p-dot-s)) "a\rb")
+                           (app (ref match?) (app (ref p-dot-s)) "axb")))))))
+
+(defn test-mode-bits [] :bool
+  ;; the nibble is a bitfield and "K0"/"K1" still mean what they meant
+  (and (not (app (ref prog-dotall?) (app (ref p-dot))))
+       (and (app (ref prog-dotall?) (app (ref p-dot-s)))
+            (and (not (app (ref prog-fold?) (app (ref p-dot-s))))
+                 (and (app (ref prog-multiline?) (app (ref p-anch-m)))
+                      (and (not (app (ref prog-multiline?) (app (ref p-anch))))
+                           (not (app (ref prog-fold?) (app (ref p-anch-m))))))))))
+
+(defn test-multiline-anchors [] :bool
+  ;; ^b$ finds nothing in "a\nb" without (?m) and finds the second line with it
+  (and (< (app (ref search-start) (app (ref p-anch)) "a\nb") 0)
+       (and (= 2 (app (ref search-start) (app (ref p-anch-m)) "a\nb"))
+            ;; the first line still anchors, with or without the flag
+            (and (= 0 (app (ref search-start) (app (ref p-anch-m)) "b\na"))
+                 (and (= 0 (app (ref search-start) (app (ref p-anch)) "b"))
+                      ;; ^ asks about the character BEFORE the position: with
+                      ;; the off-by-one this answers 1 rather than 2
+                      (= 2 (app (ref search-start) (app (ref p-anch-m)) "a\nb\nc")))))))
 
 (defn main []
   (app (ref prog-count) (p-ab)))
