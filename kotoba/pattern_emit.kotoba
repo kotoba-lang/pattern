@@ -29,11 +29,12 @@
   ;; number does not depend on anything downstream.
   (:export [main compile-text compile-program
             emit-alt emit-cat emit-atom emit-quant hex6 ins error? error-of
-            group-number count-groups
+            group-number count-groups leading-modes leading-width
             test-literal test-class test-alternation test-anchor
             test-group test-escape test-refusals
             test-star test-plus test-opt test-count test-count-range
-            test-capture-number test-capture-emit test-capture-noncapturing])
+            test-capture-number test-capture-emit test-capture-noncapturing
+            test-leading-modes test-mode-header])
   (:schemas {:em/cur [:record :em/cur
                       [[:s :string] [:i :i64] [:stop :i64] [:base :i64]
                        [:ranges :string] [:nr :i64]]]
@@ -635,24 +636,83 @@
 
 ;; --- the public surface ---------------------------------------------------
 
-(defn fold? [re :string] :bool
-  (if (< (string-length re) 4) false (string=? "(?i)" (string-substring re 0 4))))
+;; --- leading inline flags -------------------------------------------------
+;;
+;; `(?i)` was the only one, matched as a literal four-character prefix. The
+;; others cssom actually uses are `(?m)`, `(?s)` and the combinations, so this
+;; reads the letters instead of the string: any of `i` `s` `m` in any order,
+;; terminated by `)`.
+;;
+;; Only LEADING. A flag group in the middle of a pattern changes the mode from
+;; that point on, and this VM carries modes in the program header, which is
+;; the whole program -- so a mid-pattern group is refused rather than silently
+;; applied to everything. That refusal is `:group/inline-flags`, the same one
+;; these got before, and it is an implementation limit, not a design decision:
+;; per-instruction mode bits would lift it.
+
+(defn flag-bit [cp :i64] :i64
+  (if (= cp 105) 1 (if (= cp 115) 2 (if (= cp 109) 4 0))))
+
+(defn flag-scan [x [:ref :em/gc]] :i64
+  ;; the accumulated mode bits, or -1 if this is not a well-formed flag group
+  (let [s (record-get x :s)
+        i (record-get x :i)
+        acc (record-get x :acc)]
+    (let [cp (app (ref cp-at) s i)]
+      (if (= cp 41)
+        acc
+        (let [b (app (ref flag-bit) cp)]
+          (if (= b 0)
+            -1
+            (app (ref flag-scan)
+                 (record-new [:ref :em/gc] s (+ i 1) 0 false
+                             (if (= 1 (- (quot acc b) (* 2 (quot acc (* 2 b)))))
+                               acc
+                               (+ acc b))))))))))
+
+;; The mode bits a leading `(?...)` sets, or 0 when there is no such group.
+(defn leading-modes [re :string] :i64
+  (if (< (string-length re) 4)
+    0
+    (if (if (= 40 (app (ref cp-at) re 0)) (= 63 (app (ref cp-at) re 1)) false)
+      (let [m (app (ref flag-scan) (record-new [:ref :em/gc] re 2 0 false 0))]
+        (if (< m 0) 0 m))
+      0)))
+
+(defn close-paren-at [x [:ref :em/gc]] :i64
+  (let [s (record-get x :s)
+        i (record-get x :i)]
+    (if (>= i (string-length s))
+      i
+      (if (= 41 (app (ref cp-at) s i))
+        i
+        (app (ref close-paren-at) (record-new [:ref :em/gc] s (+ i 1) 0 false 0))))))
+
+;; How many characters that group occupies, so the body can skip it.
+(defn leading-width [re :string] :i64
+  (if (= 0 (app (ref leading-modes) re))
+    0
+    (+ 1 (app (ref close-paren-at) (record-new [:ref :em/gc] re 2 0 false 0)))))
 
 (defn refused-shape [body :string] :keyword
   (if (string-contains? body "(?=") :refused/lookahead
       (if (string-contains? body "(?!") :refused/lookahead
           (if (string-contains? body "(?<") :refused/lookbehind :none))))
 
-(defn assemble [fold :bool code :string nr :i64 ranges :string] :string
+;; The nibble after "K" is a bitfield now, not a bool: bit 0 fold, bit 1
+;; dotall, bit 2 multiline. `0` and `1` still mean what they meant, so every
+;; program literal already compiled and committed still reads correctly and
+;; the header did not have to widen.
+(defn assemble [modes :i64 code :string nr :i64 ranges :string] :string
   (string-concat
-   (string-concat (if fold "K1" "K0")
+   (string-concat (string-concat "K" (app (ref hex-digit-char) modes))
                   (string-concat (app (ref hex6) (app (ref code-len) code))
                                  (app (ref hex6) nr)))
    (string-concat code ranges)))
 
 (defn compile-program [re :string] :document
-  (let [f (app (ref fold?) re)
-        body (if f (string-substring re 4 (string-length re)) re)
+  (let [modes (app (ref leading-modes) re)
+        body (string-substring re (app (ref leading-width) re) (string-length re))
         shape (app (ref refused-shape) body)]
     (if (not (= shape :none))
       (app (ref error-of) shape 0)
@@ -663,7 +723,7 @@
           (if (not (= (string-length body) (app (ref di) out :i)))
             (app (ref error-of) :refused/unparsed (app (ref di) out :i))
             (let [code (string-concat (app (ref dstr) out :code) (app (ref ins) 6 0 0 0))
-                  text (app (ref assemble) f code (app (ref di) out :nr)
+                  text (app (ref assemble) modes code (app (ref di) out :nr)
                             (app (ref dstr) out :ranges))]
               (document-map :text (document-string text)))))))))
 
@@ -779,6 +839,33 @@
                 (and (string=? "50000010000000" (string-substring two 42 56))
                      (and (string=? "50000020000000" (string-substring two 56 70))
                           (string=? "50000030000000" (string-substring two 84 98)))))))))
+
+(defn test-leading-modes [] :bool
+  ;; the letters, in any order, and the width of the group they occupy
+  (and (= 1 (app (ref leading-modes) "(?i)ab"))
+       (and (= 2 (app (ref leading-modes) "(?s)ab"))
+            (and (= 4 (app (ref leading-modes) "(?m)ab"))
+                 (and (= 3 (app (ref leading-modes) "(?is)ab"))
+                      (and (= 7 (app (ref leading-modes) "(?smi)ab"))
+                           (and (= 4 (app (ref leading-width) "(?i)ab"))
+                                (and (= 6 (app (ref leading-width) "(?smi)ab"))
+                                     ;; not a flag group: no modes, no width
+                                     (and (= 0 (app (ref leading-modes) "(?:a)b"))
+                                          (and (= 0 (app (ref leading-width) "(?:a)b"))
+                                               (= 0 (app (ref leading-modes) "ab"))))))))))))
+
+(defn test-mode-header [] :bool
+  ;; the nibble after "K" carries the bits, and the body is compiled without
+  ;; the flag group -- (?i)ab and ab differ in exactly one character
+  (and (string=? "K1000003000000" (string-substring (app (ref compile-text) "(?i)ab") 0 14))
+       (and (string=? "K2000003000000" (string-substring (app (ref compile-text) "(?s)ab") 0 14))
+            (and (string=? "K4000003000000" (string-substring (app (ref compile-text) "(?m)ab") 0 14))
+                 (and (string=? "K7000003000000" (string-substring (app (ref compile-text) "(?ism)ab") 0 14))
+                      ;; and no flags is still "K0", which is what every
+                      ;; already-committed program literal reads as
+                      (and (string=? "K0000003000000" (string-substring (app (ref compile-text) "ab") 0 14))
+                           (string=? (string-substring (app (ref compile-text) "(?i)ab") 14 42)
+                                     (string-substring (app (ref compile-text) "ab") 14 42))))))))
 
 (defn main []
   (string-length (app (ref compile-text) "ab")))

@@ -22,7 +22,7 @@
   ;;
   ;; ## The format
   ;;
-  ;;   header   "K" fold(1) nc(6 hex) nr(6 hex)                  14 chars
+  ;;   header   "K" modes(1) nc(6 hex) nr(6 hex)                 14 chars
   ;;   code     nc x [ op(1) a(6) b(6) c(1) ]                    14 chars each
   ;;   ranges   nr x [ lo(6) hi(6) ]                             12 chars each
   ;;
@@ -101,6 +101,9 @@
                          [:len :i64] [:want-end :bool]]]
              :pat/range [:record :pat/range
                          [[:prog :string] [:i :i64] [:n :i64] [:cp :i64]]]
+             :pat/start [:record :pat/start
+                         [[:prog :string] [:s :string] [:pos :i64]
+                          [:len :i64] [:blen :i64] [:w :i64]]]
              :pat/zeros [:record :pat/zeros [[:acc :string] [:n :i64]]]
              :pat/fills [:record :pat/fills [[:acc :string] [:n :i64]]]
              :pat/slot [:record :pat/slot
@@ -133,8 +136,49 @@
 
 ;; --- the program ----------------------------------------------------------
 
+;; The character after "K" was a single fold BIT and is now a bitfield, which
+;; is why the header did not have to widen: bit 0 is fold, so "K0" and "K1"
+;; mean exactly what they meant, and every program literal already compiled
+;; and committed still reads correctly. Bits 1 and 2 are new.
+;;
+;;   bit 0  1  fold      (?i)   case-insensitive
+;;   bit 1  2  dotall    (?s)   `.` matches a line terminator
+;;   bit 2  4  multiline (?m)   ^ and $ match at line boundaries
+(defn mode-bit? [p :string v :i64] :bool
+  (let [d (app (ref hex-at) p 1 1)]
+    (= 1 (- (quot d v) (* 2 (quot d (* 2 v)))))))
+
 (defn prog-fold? [p :string] :bool
-  (= 49 (string-code-point-at p 1)))
+  (app (ref mode-bit?) p 1))
+
+(defn prog-dotall? [p :string] :bool
+  (app (ref mode-bit?) p 2))
+
+(defn prog-multiline? [p :string] :bool
+  (app (ref mode-bit?) p 4))
+
+;; ⚠ `.` matched a line terminator until 2026-09-09, and JavaScript's does not.
+;; Measured that day: `a.b` against "a\nb" answered TRUE here and false there,
+;; and so did `.` against "\n" and `a.*b` against "a\nxb". The 270-check
+;; `vm_parity` and the 252-check `pattern_parity` had both been green for days
+;; -- neither corpus put a newline where a `.` was tested, which is the same
+;; shape as the `$` bug this file already records above. The corpora now do.
+;;
+;; The set is JavaScript's: LF, CR, and the two Unicode separators. A NEGATED
+;; CLASS still matches them, in both engines -- `[^x]` is not `.`.
+(defn line-terminator? [cp :i64] :bool
+  (if (= cp 10) true (if (= cp 13) true (if (= cp 8232) true (= cp 8233)))))
+
+;; Under (?m) an anchor also holds at a line boundary, so `^` asks about the
+;; character BEFORE the position and `$` about the one AT it. Off the end in
+;; either direction is not a terminator -- the two callers handle the real
+;; edges themselves.
+(defn terminator-at? [s :string i :i64] :bool
+  (if (< i 0)
+    false
+    (if (>= i (string-length s))
+      false
+      (app (ref line-terminator?) (string-code-point-at s i)))))
 
 (defn prog-count [p :string] :i64
   (app (ref hex-at) p 2 6))
@@ -396,21 +440,36 @@
                                    w sp))
                   (app (ref set-add) list blen pc slots))))))))))
 
-;; `pos` rather than the two flags it used to take: with `w` and the slot
-;; position added this was six parameters, one past `:max-parameters 5`, and
-;; both flags are functions of `pos` anyway.
-(defn start-list [prog :string pos :i64 len :i64 blen :i64 w :i64] :string
-  (app (ref add-thread)
-       (record-new [:ref :pat/add] prog (app (ref new-set) blen) 0
-                   (= pos 0) (>= pos len) blen
-                   (app (ref no-slots) (quot (- w 6) 6)) w pos)))
+;; A record rather than a parameter list: the two flags are functions of `pos`
+;; and, under (?m), of the string around it, so this needs `s` as well -- which
+;; is seven values, past `:max-parameters 5`.
+;;
+;; ⚠ `^` under (?m) asks about the character BEFORE `pos`, not at it. Asking
+;; at it makes `^` true wherever a newline begins rather than wherever a line
+;; does, which is off by exactly one line.
+(defn start-list [x [:ref :pat/start]] :string
+  (let [prog (record-get x :prog)
+        s (record-get x :s)
+        pos (record-get x :pos)
+        len (record-get x :len)
+        blen (record-get x :blen)
+        w (record-get x :w)
+        multi (app (ref prog-multiline?) prog)]
+    (app (ref add-thread)
+         (record-new [:ref :pat/add] prog (app (ref new-set) blen) 0
+                     (if (= pos 0) true (if multi (app (ref terminator-at?) s (- pos 1)) false))
+                     (if (>= pos len) true (if multi (app (ref terminator-at?) s pos) false))
+                     blen
+                     (app (ref no-slots) (quot (- w 6) 6)) w pos))))
 
 ;; --- one input position ---------------------------------------------------
 
 (defn matches-here? [prog :string pc :i64 cp :i64] :bool
   (let [op (app (ref ins-op) prog pc)]
     (if (= op 2)
-      true
+      (if (app (ref prog-dotall?) prog)
+        true
+        (not (app (ref line-terminator?) cp)))
       (if (= op 0)
         (if (app (ref prog-fold?) prog)
           (= (app (ref fold-cp) cp) (app (ref fold-cp) (app (ref ins-a) prog pc)))
@@ -472,7 +531,13 @@
              (record-new [:ref :pat/threads] prog list (+ i 1) cp
                          (if (app (ref matches-here?) prog pc cp)
                            (app (ref add-thread)
-                                (record-new [:ref :pat/add] prog next (+ pc 1) false eol blen
+                                (record-new [:ref :pat/add] prog next (+ pc 1)
+                                            ;; under (?m), consuming a
+                                            ;; terminator lands on a line start
+                                            (if (app (ref prog-multiline?) prog)
+                                              (app (ref line-terminator?) cp)
+                                              false)
+                                            eol blen
                                             (app (ref slots-at) list blen w i) w sp))
                            next)
                          blen eol w sp))))))
@@ -512,7 +577,12 @@
                             (record-new [:ref :pat/run] prog
                                         (app (ref step-threads)
                                              (record-new [:ref :pat/threads] prog list 0 cp
-                                                         (app (ref new-set) blen) blen (>= nxt len)
+                                                         (app (ref new-set) blen) blen
+                                                         (if (>= nxt len)
+                                                           true
+                                                           (if (app (ref prog-multiline?) prog)
+                                                             (app (ref terminator-at?) s nxt)
+                                                             false))
                                                          w nxt))
                                         s nxt len blen w))]
             (if (> (string-length deeper) 0) deeper here)))))))
@@ -523,7 +593,8 @@
         w (app (ref width-of) prog)]
     (app (ref run-from)
          (record-new [:ref :pat/run] prog
-                     (app (ref start-list) prog pos len blen w)
+                     (app (ref start-list)
+                          (record-new [:ref :pat/start] prog s pos len blen w))
                      s pos len blen w))))
 
 (defn verdict-end [v :string] :i64
@@ -790,5 +861,3 @@
 
 (defn main []
   (app (ref prog-count) (p-ab)))
-
-;; slice in progress: `.` must not match a line terminator, and (?s)/(?m).
