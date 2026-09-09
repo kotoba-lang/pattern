@@ -75,6 +75,24 @@ test rather than left to be discovered:
 * the machine is leftmost-**longest**; JS is leftmost-first. For `a|ab`
   against `"ab"` the machine answers 2 and JS answers 1.
 
+## How much of the real corpus this admits
+
+Measured 2026-09-09 by compiling every unique regex literal in `htmldom`,
+`cssom`, `browser`, `html`, `css` and `kiyaku` through `compile-pattern`:
+
+| | |
+|---|---|
+| unique literals scraped | 200 |
+| **admitted** | **183** |
+| refused: inline flags `(?m)` `(?s)` `(?is)` | 5 |
+| refused: non-greedy `.*?` | 3 |
+| refused: lookahead / lookbehind | 2 |
+| not patterns at all (multi-line scrape artifacts) | 7 |
+
+So 183 of the 193 real ones, and the ten that are left name themselves:
+`(?s)` and `(?m)` first (5), then non-greedy (3), then lookahead (2). None of
+them is a reason to hand-roll another scanner.
+
 ## Fuel
 
 The default per-instance budget is **512** — a plain countdown returns at
