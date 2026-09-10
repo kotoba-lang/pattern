@@ -77,12 +77,14 @@
             ins-op ins-a ins-b ins-c range-lo range-hi
             hex-at nslots-of width-of look-hit? look-negated? look-behind?
             match? search search-start search-end
-            find found? group-count group-start group-end group-text
+            find find-from search-start-from
+            found? group-count group-start group-end group-text
             test-hex test-header test-literal test-class test-quantifier
             test-alternation test-anchor test-search test-fold test-bounded
             test-capture test-capture-optional test-capture-nested
             test-dot-excludes-newline test-mode-bits test-multiline-anchors
-            test-lookahead test-lookahead-negative])
+            test-lookahead test-lookahead-negative
+            test-find-from test-find-from-empty])
   (:schemas {:pat/hex [:record :pat/hex [[:s :string] [:i :i64] [:n :i64] [:acc :i64]]]
              ;; `slots`, `w` and `sp` are the capture machinery. A program
              ;; with no `save` has `w` 6 and `slots` "", which is byte for byte
@@ -712,11 +714,31 @@
 ;; `(?:`. Slots 2k and 2k+1 hold group (k+1)'s start and end, and a group that
 ;; did not participate in the match keeps `ffffff` in both.
 
-(defn find [prog :string s :string] :string
-  (let [start (app (ref search-start) prog s)]
+;; --- scanning from a position ----------------------------------------------
+;;
+;; `search-start` and `find` begin at 0, which answers "does this appear" and
+;; not "where is the next one". A replace loop needs the second: find, splice,
+;; continue past what was consumed. `scan-from` already took a position; only
+;; the entry points did not expose it.
+;;
+;; ⚠ A pattern that can match EMPTY matches at every position, so a caller
+;; that advances to the match's end makes no progress and loops forever. The
+;; verdict carries both ends, so the caller can see `end == start` and step by
+;; one code point instead. This is not something the library can decide: for
+;; `a*` against "bb" the empty matches at 0, 1 and 2 are the right answer, and
+;; only the caller knows whether it wants them.
+(defn search-start-from [prog :string s :string pos :i64] :i64
+  (app (ref scan-from)
+       (record-new [:ref :pat/scan] prog s pos (string-length s) false)))
+
+(defn find-from [prog :string s :string pos :i64] :string
+  (let [start (app (ref search-start-from) prog s pos)]
     (if (< start 0)
       ""
       (string-concat (app (ref hex6) start) (app (ref run-at) prog s start)))))
+
+(defn find [prog :string s :string] :string
+  (app (ref find-from) prog s 0))
 
 (defn found? [v :string] :bool
   (> (string-length v) 0))
@@ -995,6 +1017,40 @@
             ;; the empty tail gets wrong
             (and (= 1 (app (ref match-end-at) (app (ref p-look-neg)) "a" 0))
                  (app (ref look-negated?) 1)))))
+
+;; --- scanning from a position ---------------------------------------------
+
+;; a* -- matches empty at every position, which is the hazard `find-from`
+;; documents rather than papers over
+(defn p-empty [] :string
+  "K000000400000030000010000030000006100000004000000000000060000000000000")
+
+(defn test-find-from [] :bool
+  ;; `p-look` is a(?=b); "ab xx ab" has one at 0 and one at 6
+  (let [s "ab xx ab"
+        a (app (ref find-from) (app (ref p-look)) s 0)
+        b (app (ref find-from) (app (ref p-look)) s 1)
+        c (app (ref find-from) (app (ref p-look)) s 7)]
+    (and (= 0 (app (ref group-start) a 0))
+         (and (= 6 (app (ref group-start) b 0))
+              ;; past the last one, nothing -- not a wrapped-around first
+              (and (not (app (ref found?) c))
+                   ;; and `find` is `find-from` at 0
+                   (string=? a (app (ref find) (app (ref p-look)) s)))))))
+
+(defn test-find-from-empty [] :bool
+  ;; ⚠ the hazard the docstring names: `p-empty` is a* and matches empty
+  ;; everywhere, so start == end and a caller advancing to `end` would not
+  ;; move. The library reports it rather than hiding it.
+  (let [v (app (ref find-from) (app (ref p-empty)) "bb" 0)
+        w (app (ref find-from) (app (ref p-empty)) "bb" 1)]
+    (and (app (ref found?) v)
+         (and (= 0 (app (ref group-start) v 0))
+              (and (= 0 (app (ref group-end) v 0))
+                   ;; the same at the next position, which is what makes a
+                   ;; naive loop spin
+                   (and (= 1 (app (ref group-start) w 0))
+                        (= 1 (app (ref group-end) w 0))))))))
 
 (defn main []
   (app (ref prog-count) (p-ab)))
