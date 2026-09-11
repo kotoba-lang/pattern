@@ -29,7 +29,7 @@
 
 (def script
   (or (first (filter (fn [a] (.endsWith a ".cljs")) (rest (.slice js/process.argv 0))))
-      "test/lookbehind_probe.cljs"))
+      "test/lookbehind_probe.cljk"))
 (def repo-root (path/resolve (path/dirname (path/resolve script)) ".."))
 (def fuel 200000000)
 

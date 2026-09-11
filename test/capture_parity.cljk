@@ -22,7 +22,7 @@
 ;; Exit codes: 0 passed, 1 disagreement, 2 REFUSED.
 ;;
 ;;   nbb --classpath "src:$HOME/github/com-junkawasaki/orgs/kotoba-lang/text/src" \
-;;       test/capture_parity.cljs
+;;       test/capture_parity.cljk
 
 (ns capture-parity
   (:require ["node:child_process" :as cp]
@@ -33,7 +33,7 @@
 
 (def script
   (or (first (filter (fn [a] (.endsWith a ".cljs")) (rest (.slice js/process.argv 0))))
-      "test/capture_parity.cljs"))
+      "test/capture_parity.cljk"))
 (def repo-root (path/resolve (path/dirname (path/resolve script)) ".."))
 (def fuel 200000000)
 

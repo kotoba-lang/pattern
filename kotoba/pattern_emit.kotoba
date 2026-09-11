@@ -740,7 +740,7 @@
 ;; of heap. Measured 2026-09-09: `pattern-vm`'s group compiles at 6 members and
 ;; OOMs at 7, and a synthetic group of eight trivial mutually recursive
 ;; functions OOMs while five, seven, nine through twelve compile.
-;; kotoba-lang/amu#915. `test/lookbehind_probe.cljs` fails when that stops
+;; kotoba-lang/amu#915. `test/lookbehind_probe.cljk` fails when that stops
 ;; being true.
 (defn refused-shape [body :string] :keyword
   (if (string-contains? body "(?<") :refused/lookbehind :none))
@@ -936,7 +936,7 @@
 (defn test-lookbehind-still-refused [] :bool
   ;; ⚠ This is a BLOCK, not a design decision. It is refused because the
   ;; backward scan it needs is a seventh member of the machine's recursion
-  ;; group and amu runs out of heap there. `test/lookbehind_probe.cljs` is the
+  ;; group and amu runs out of heap there. `test/lookbehind_probe.cljk` is the
   ;; removal condition and fails when this stops being true.
   (and (string-contains? (app (ref compile-text) "(?<=a)b") ":refused/lookbehind")
        (string-contains? (app (ref compile-text) "(?<!a)b") ":refused/lookbehind")))

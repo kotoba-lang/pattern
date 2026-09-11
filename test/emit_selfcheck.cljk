@@ -9,7 +9,7 @@
 ;;
 ;; Exit codes: 0 passed, 1 failed, 2 REFUSED.
 ;;
-;;   nbb test/emit_selfcheck.cljs
+;;   nbb test/emit_selfcheck.cljk
 
 (ns emit-selfcheck
   (:require ["node:child_process" :as cp]
@@ -20,7 +20,7 @@
 
 (def script
   (or (first (filter (fn [a] (.endsWith a ".cljs")) (rest (.slice js/process.argv 0))))
-      "test/emit_selfcheck.cljs"))
+      "test/emit_selfcheck.cljk"))
 (def repo-root (path/resolve (path/dirname (path/resolve script)) ".."))
 (def fuel 200000000)
 

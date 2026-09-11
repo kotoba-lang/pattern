@@ -31,7 +31,7 @@
 ;;
 ;; Exit codes: 0 passed, 1 failed, 2 REFUSED.
 ;;
-;;   nbb --classpath src test/pattern_parity.cljs
+;;   nbb --classpath src test/pattern_parity.cljk
 
 (ns vm-parity
   (:require ["node:child_process" :as cp]
@@ -43,7 +43,7 @@
 
 (def script
   (or (first (filter (fn [a] (.endsWith a ".cljs")) (rest (.slice js/process.argv 0))))
-      "test/vm_parity.cljs"))
+      "test/vm_parity.cljk"))
 (def repo-root (path/resolve (path/dirname (path/resolve script)) ".."))
 
 ;; Measured 2026-09-09: the default per-instance budget is 512 -- a plain
