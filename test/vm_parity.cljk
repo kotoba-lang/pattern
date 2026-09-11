@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; The STRING-program matcher (`kotoba/pattern_vm.kotoba`) against the host's
 ;; own regex engine, over the same corpus `pattern_parity.cljs` runs against
 ;; the document-program matcher.
@@ -31,7 +31,7 @@
 ;;
 ;; Exit codes: 0 passed, 1 failed, 2 REFUSED.
 ;;
-;;   nbb --classpath src test/pattern_parity.cljk
+;;   kbb --backend sci --classpath src test/pattern_parity.cljk
 
 (ns vm-parity
   (:require ["node:child_process" :as cp]

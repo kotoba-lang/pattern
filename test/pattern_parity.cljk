@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; Differential parity: the Kotoba matcher against the host's own regex engine.
 ;;
 ;; Both sides RUN. The oracle is JavaScript's RegExp -- the engine this
@@ -23,7 +23,7 @@
 ;;
 ;; Exit codes: 0 passed, 1 failed, 2 REFUSED.
 ;;
-;;   nbb --classpath src test/pattern_parity.cljk
+;;   kbb --backend sci --classpath src test/pattern_parity.cljk
 
 (ns pattern-parity
   (:require ["node:child_process" :as cp]

@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; The Kotoba string emitter against the `.cljc` compiler, THROUGH THE MACHINE.
 ;;
 ;; Not string equality: the `.cljc` shares a class table between identical
@@ -16,7 +16,7 @@
 ;; The oracle requires `kotoba.lang.text`, so the sibling repo has to be on the
 ;; classpath -- a worktree does not sit beside it:
 ;;
-;;   nbb --classpath "src:$HOME/github/com-junkawasaki/orgs/kotoba-lang/text/src" \
+;;   kbb --backend sci --classpath "src:$HOME/github/com-junkawasaki/orgs/kotoba-lang/text/src" \
 ;;       test/emit_parity.cljk
 
 (ns emit-parity

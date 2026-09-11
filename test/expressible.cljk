@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; How much of the browser stack's regex corpus this library can express.
 ;;
 ;; The other suites ask whether the patterns that compile give the right
@@ -18,7 +18,7 @@
 ;;
 ;; Exit codes: 0 within the ratchet, 1 over it, 2 REFUSED.
 ;;
-;;   nbb --classpath "src:$HOME/github/com-junkawasaki/orgs/kotoba-lang/text/src" \
+;;   kbb --backend sci --classpath "src:$HOME/github/com-junkawasaki/orgs/kotoba-lang/text/src" \
 ;;       test/expressible.cljk
 
 (ns expressible

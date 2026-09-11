@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; The removal condition for the lookbehind block, as a check rather than a note.
 ;;
 ;; `(?<=` and `(?<!` are refused, and the reason is upstream: a lookbehind

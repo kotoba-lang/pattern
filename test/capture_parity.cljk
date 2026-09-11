@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; Captured groups, THROUGH THE MACHINE, against JavaScript's own RegExp.
 ;;
 ;; The oracle here is not the `.cljc` compiler -- that one has no captures
@@ -21,7 +21,7 @@
 ;;
 ;; Exit codes: 0 passed, 1 disagreement, 2 REFUSED.
 ;;
-;;   nbb --classpath "src:$HOME/github/com-junkawasaki/orgs/kotoba-lang/text/src" \
+;;   kbb --backend sci --classpath "src:$HOME/github/com-junkawasaki/orgs/kotoba-lang/text/src" \
 ;;       test/capture_parity.cljk
 
 (ns capture-parity

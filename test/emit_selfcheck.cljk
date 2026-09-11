@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; Run `kotoba/pattern_emit.kotoba`'s own test-* through the EMITTED ESM.
 ;;
 ;; `kotoba -M test` cannot: its fuel budget is fixed and `--fuel` does not
@@ -9,7 +9,7 @@
 ;;
 ;; Exit codes: 0 passed, 1 failed, 2 REFUSED.
 ;;
-;;   nbb test/emit_selfcheck.cljk
+;;   kbb --backend sci test/emit_selfcheck.cljk
 
 (ns emit-selfcheck
   (:require ["node:child_process" :as cp]
