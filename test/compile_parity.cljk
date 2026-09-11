@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; Differential parity between the two compilers: `kotoba/pattern_compile.kotoba`
 ;; (the port) and `src/pattern/compile.cljk` (the oracle it replaces).
 ;;
@@ -16,7 +16,7 @@
 ;;
 ;; Exit codes: 0 passed, 1 disagreement, 2 REFUSED.
 ;;
-;;   nbb --classpath src test/compile_parity.cljk
+;;   kbb --backend sci --classpath src test/compile_parity.cljk
 
 (ns compile-parity
   (:require ["node:child_process" :as cp]

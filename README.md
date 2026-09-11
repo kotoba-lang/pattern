@@ -242,27 +242,27 @@ kotoba -M compile "$PWD/kotoba/pattern_core.kotoba" --target js --fuel 200000 --
 ```bash
 # the string-program machine against the host's own RegExp: 270 checks,
 # including four real patterns whose programs are far past 32 instructions
-nbb --classpath src test/vm_parity.cljk
+kbb --backend sci --classpath src test/vm_parity.cljk
 
 # the document-program machine, same corpus minus the big ones: 252 checks
-nbb --classpath src test/pattern_parity.cljk
+kbb --backend sci --classpath src test/pattern_parity.cljk
 
 # the string emitter's own tests, through the artifact (-M test's fuel is fixed)
-nbb test/emit_selfcheck.cljk
+kbb --backend sci test/emit_selfcheck.cljk
 
 # the two compilers compared THROUGH the machine, over the browser-stack corpus
-nbb --classpath "src:$HOME/github/com-junkawasaki/orgs/kotoba-lang/text/src" \
+kbb --backend sci --classpath "src:$HOME/github/com-junkawasaki/orgs/kotoba-lang/text/src" \
     test/emit_parity.cljk
 
 # the document-program compiler against the .cljc oracle, by bytes
-nbb --classpath src test/compile_parity.cljk
+kbb --backend sci --classpath src test/compile_parity.cljk
 
 # the compiler's own tests. 8/8 on :jvm-kir; five trap on :js and :wasm under
 # the runner's fixed fuel, which --fuel does not change (measured)
 kotoba -M test "$PWD/kotoba/pattern_compile.kotoba"
 
 # the upstream limitation this library works around, so nobody has to remember
-nbb test/entry_probe.cljk
+kbb --backend sci test/entry_probe.cljk
 ```
 
 `kotoba -M test` is **not** used here, and that is the one thing this repo

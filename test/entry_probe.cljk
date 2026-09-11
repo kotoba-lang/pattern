@@ -1,4 +1,4 @@
-#!/usr/bin/env nbb
+#!/usr/bin/env kbb
 ;; A probe for the limitation this library works around, so that nobody has to
 ;; remember it.
 ;;
@@ -22,7 +22,7 @@
 ;; Exit codes: 0 the limitation is still there, 1 it is gone (act on it),
 ;; 2 REFUSED.
 ;;
-;;   nbb test/entry_probe.cljk
+;;   kbb --backend sci test/entry_probe.cljk
 
 (ns entry-probe
   (:require ["node:child_process" :as cp]
