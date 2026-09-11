@@ -22,7 +22,7 @@
 ;; Exit codes: 0 the limitation is still there, 1 it is gone (act on it),
 ;; 2 REFUSED.
 ;;
-;;   nbb test/entry_probe.cljs
+;;   nbb test/entry_probe.cljk
 
 (ns entry-probe
   (:require ["node:child_process" :as cp]
@@ -33,7 +33,7 @@
 
 (def script
   (or (first (filter (fn [a] (.endsWith a ".cljs")) (rest (.slice js/process.argv 0))))
-      "test/entry_probe.cljs"))
+      "test/entry_probe.cljk"))
 (def repo-root (path/resolve (path/dirname (path/resolve script)) ".."))
 
 (defn- sh [cmd args]

@@ -19,7 +19,7 @@
 ;; Exit codes: 0 within the ratchet, 1 over it, 2 REFUSED.
 ;;
 ;;   nbb --classpath "src:$HOME/github/com-junkawasaki/orgs/kotoba-lang/text/src" \
-;;       test/expressible.cljs
+;;       test/expressible.cljk
 
 (ns expressible
   (:require ["node:child_process" :as cp]
@@ -30,7 +30,7 @@
 
 (def script
   (or (first (filter (fn [a] (.endsWith a ".cljs")) (rest (.slice js/process.argv 0))))
-      "test/expressible.cljs"))
+      "test/expressible.cljk"))
 (def repo-root (path/resolve (path/dirname (path/resolve script)) ".."))
 (def fuel 200000000)
 
@@ -47,7 +47,7 @@
   ;; expressible count goes up by one, not two.
   {":quantifier/non-greedy"   3     ; *? +? -- cssom, css
    ":refused/lookbehind"      1})   ; (?<=) -- cssom, blocked upstream, see
-                                    ; test/lookbehind_probe.cljs
+                                    ; test/lookbehind_probe.cljk
 
 (defn- sh [cmd args]
   (let [r (cp/spawnSync cmd (clj->js args) #js {:encoding "utf8" :timeout 900000})]

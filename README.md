@@ -32,10 +32,10 @@ So: one scanner, in a library, driven by data.
 | `kotoba/pattern_core.kotoba` | the same machine over a program carried as a `:document`: 32 instructions, kept as the oracle |
 | `kotoba/pattern_emit.kotoba` | the compiler that emits the **string** program, with no tree on the way |
 | `kotoba/pattern_compile.kotoba` | the earlier compiler, emitting a `:document` program (32 instructions), kept as an oracle |
-| `src/pattern/compile.cljc` | the same compiler, kept as the parity **oracle** |
+| `src/pattern/compile.cljk` | the same compiler, kept as the parity **oracle** |
 
 Both compilers are run over every unique regex literal in the browser stack and
-their programs compared instruction for instruction (`test/compile_parity.cljs`).
+their programs compared instruction for instruction (`test/compile_parity.cljk`).
 The `.cljc` is no longer the implementation — it is what the port is checked
 against.
 
@@ -204,7 +204,7 @@ There is no large homogeneous sequence in the guest to escape into —
 `[:vector T]` is a heterogeneous TUPLE type, bounded, and no backend has a
 sequence parameter type. The way out is to carry the program as a **`:string`**
 (the value limit is 65536 bytes) and index into it, which lifts the ceiling by
-about 300× and is the next slice. `test/compile_parity.cljs` holds 43 as a
+about 300× and is the next slice. `test/compile_parity.cljk` holds 43 as a
 RATCHET: it fails if a semantic disagreement appears and it fails if that
 number moves either way.
 
@@ -242,34 +242,34 @@ kotoba -M compile "$PWD/kotoba/pattern_core.kotoba" --target js --fuel 200000 --
 ```bash
 # the string-program machine against the host's own RegExp: 270 checks,
 # including four real patterns whose programs are far past 32 instructions
-nbb --classpath src test/vm_parity.cljs
+nbb --classpath src test/vm_parity.cljk
 
 # the document-program machine, same corpus minus the big ones: 252 checks
-nbb --classpath src test/pattern_parity.cljs
+nbb --classpath src test/pattern_parity.cljk
 
 # the string emitter's own tests, through the artifact (-M test's fuel is fixed)
-nbb test/emit_selfcheck.cljs
+nbb test/emit_selfcheck.cljk
 
 # the two compilers compared THROUGH the machine, over the browser-stack corpus
 nbb --classpath "src:$HOME/github/com-junkawasaki/orgs/kotoba-lang/text/src" \
-    test/emit_parity.cljs
+    test/emit_parity.cljk
 
 # the document-program compiler against the .cljc oracle, by bytes
-nbb --classpath src test/compile_parity.cljs
+nbb --classpath src test/compile_parity.cljk
 
 # the compiler's own tests. 8/8 on :jvm-kir; five trap on :js and :wasm under
 # the runner's fixed fuel, which --fuel does not change (measured)
 kotoba -M test "$PWD/kotoba/pattern_compile.kotoba"
 
 # the upstream limitation this library works around, so nobody has to remember
-nbb test/entry_probe.cljs
+nbb test/entry_probe.cljk
 ```
 
 `kotoba -M test` is **not** used here, and that is the one thing this repo
 cannot do: a `main` that calls the machine — and any `test-*` the runner would
 evaluate — makes the compiler refuse the module at the `:value` phase with
 `"value is not a boolean"`, while the same module compiles for the JS backend
-and answers correctly. `test/entry_probe.cljs` rebuilds that failing form from
+and answers correctly. `test/entry_probe.cljk` rebuilds that failing form from
 the current source and **goes red the day the compiler stops refusing it**.
 
 ## Not done

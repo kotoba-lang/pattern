@@ -1,6 +1,6 @@
 #!/usr/bin/env nbb
 ;; Differential parity between the two compilers: `kotoba/pattern_compile.kotoba`
-;; (the port) and `src/pattern/compile.cljc` (the oracle it replaces).
+;; (the port) and `src/pattern/compile.cljk` (the oracle it replaces).
 ;;
 ;; The corpus is not invented: it is every unique regex literal scraped from
 ;; kotoba-lang's browser stack -- htmldom, cssom, browser, html, css, kiyaku --
@@ -16,7 +16,7 @@
 ;;
 ;; Exit codes: 0 passed, 1 disagreement, 2 REFUSED.
 ;;
-;;   nbb --classpath src test/compile_parity.cljs
+;;   nbb --classpath src test/compile_parity.cljk
 
 (ns compile-parity
   (:require ["node:child_process" :as cp]
@@ -28,7 +28,7 @@
 
 (def script
   (or (first (filter (fn [a] (.endsWith a ".cljs")) (rest (.slice js/process.argv 0))))
-      "test/compile_parity.cljs"))
+      "test/compile_parity.cljk"))
 (def repo-root (path/resolve (path/dirname (path/resolve script)) ".."))
 ;; The corpus lives beside this repo in the west layout, but a WORKTREE of it
 ;; does not sit there -- measured 2026-09-09, the scrape found 0 patterns and

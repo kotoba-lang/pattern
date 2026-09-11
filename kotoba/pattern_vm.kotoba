@@ -53,7 +53,7 @@
   ;; every one of 1277 checks, and the divergence appears only in the probe
   ;; written for it -- but preferring the shortest match instead makes 86 of
   ;; those checks diverge, so the corpus is not blind to match length, it just
-  ;; never distinguishes longest from first. `test/capture_parity.cljs` asserts
+  ;; never distinguishes longest from first. `test/capture_parity.cljk` asserts
   ;; the divergence in the direction it exists.
   ;;
   ;; Fixed width on purpose: an instruction is addressed by arithmetic, so
@@ -70,7 +70,7 @@
   ;; `pattern-core`'s machine -- a Pike VM with a deduplicated thread list,
   ;; linear in input x program -- reading a different container.
   ;;
-  ;; `pattern-core` stays as the oracle: `test/vm_parity.cljs` runs both over
+  ;; `pattern-core` stays as the oracle: `test/vm_parity.cljk` runs both over
   ;; the same patterns, and the small ones must agree.
   (:export [main
             prog-fold? prog-dotall? prog-multiline? prog-count range-count
@@ -197,7 +197,7 @@
 ;; slots and they are dropped when it answers. JavaScript keeps them. No
 ;; pattern in the corpus puts a group inside a lookaround, and the emitter
 ;; does not refuse one, so this is a real difference rather than a refusal --
-;; it is asserted in `test/capture_parity.cljs` rather than left to be found.
+;; it is asserted in `test/capture_parity.cljk` rather than left to be found.
 
 (defn look-negated? [c :i64] :bool
   (= 1 (- c (* 2 (quot c 2)))))

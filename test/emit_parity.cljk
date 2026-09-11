@@ -17,7 +17,7 @@
 ;; classpath -- a worktree does not sit beside it:
 ;;
 ;;   nbb --classpath "src:$HOME/github/com-junkawasaki/orgs/kotoba-lang/text/src" \
-;;       test/emit_parity.cljs
+;;       test/emit_parity.cljk
 
 (ns emit-parity
   (:require ["node:child_process" :as cp]
@@ -29,7 +29,7 @@
 
 (def script
   (or (first (filter (fn [a] (.endsWith a ".cljs")) (rest (.slice js/process.argv 0))))
-      "test/emit_parity.cljs"))
+      "test/emit_parity.cljk"))
 (def repo-root (path/resolve (path/dirname (path/resolve script)) ".."))
 (def fuel 200000000)
 

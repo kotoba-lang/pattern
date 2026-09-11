@@ -1,6 +1,6 @@
 (ns pattern-compile
   ;; The regex-subset compiler, in Kotoba. The other half of `pattern-core`,
-  ;; and the half that used to be `src/pattern/compile.cljc`.
+  ;; and the half that used to be `src/pattern/compile.cljk`.
   ;;
   ;; With this the library is KOTOBA ONLY: a pattern goes in as text and a
   ;; program comes out as a `:document`, without a Clojure host anywhere in the
